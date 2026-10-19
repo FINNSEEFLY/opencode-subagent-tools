@@ -1,0 +1,76 @@
+{
+  "name": "opencode-subagent-tools",
+  "version": "0.1.0",
+  "description": "OpenCode V2 plugin that gives the model explicit tools to list, inspect usage of, cancel, steer, queue, and inject context into subagent sessions without interrupting the parent or siblings.",
+  "author": "Maxim Matsiushonak",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "SKILL.md",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs/configuration.md",
+    "docs/development.md",
+    "docs/installation.md",
+    "docs/reference.md",
+    "docs/security-model.md",
+    "docs/limitations.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "subagent",
+    "subagent-tools",
+    "subagent-control",
+    "agent",
+    "cancel",
+    "steer",
+    "queue",
+    "opencode-v2",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/finnseefly/opencode-subagent-tools.git"
+  },
+  "homepage": "https://github.com/finnseefly/opencode-subagent-tools#readme",
+  "bugs": {
+    "url": "https://github.com/finnseefly/opencode-subagent-tools/issues"
+  },
+  "scripts": {
+    "lint": "oxlint",
+    "format": "prettier --ignore-unknown --write .",
+    "format:check": "prettier --ignore-unknown --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run lint && bun run format:check && bun run typecheck && bun test",
+    "prepublishOnly": "bun run check"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "^2.2.5"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.2.5",
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "oxlint": "1.60.0",
+    "prettier": "3.6.2",
+    "typescript": "^7.0.2"
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 90
+  }
+}

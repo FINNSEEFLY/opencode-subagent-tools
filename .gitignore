@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+package-lock.json
+npm-shrinkwrap.json
+pnpm-lock.yaml
+yarn.lock
+
+# Build output
+dist/
+*.tsbuildinfo
+*.tgz
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
