@@ -1,7 +1,7 @@
 {
   "name": "opencode-subagent-tools",
   "version": "0.1.0",
-  "description": "OpenCode V2 plugin that gives the model explicit tools to list, inspect usage of, cancel, steer, queue, and inject context into subagent sessions without interrupting the parent or siblings.",
+  "description": "OpenCode V2 plugin that gives the agent tools to list, inspect usage, cancel, steer, queue, and inject context into its subagent sessions without interrupting the parent or siblings.",
   "author": "Maxim Matsiushonak",
   "license": "MIT",
   "type": "module",
