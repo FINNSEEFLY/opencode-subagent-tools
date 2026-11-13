@@ -5,9 +5,9 @@
 The plugin imports only `@opencode/plugin` plus Node built-ins:
 
 ```ts
-import { Plugin, Skill } from "@opencode/plugin"
-import { readFile } from "node:fs/promises"
-import { fileURLToPath } from "node:url"
+import { Plugin, Skill } from "@opencode/plugin";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 ```
 
 - `@opencode/plugin` is the plugin API package; see the README for the supported OpenCode V2 version. It ships the Promise plugin API used here (`Plugin.define`, `ctx.tool.transform`, `ctx.event`, `ctx.session`, `ctx.permission`, `ctx.model`, `ctx.skill`, `ctx.options`), including the typed `ctx.session.list`.

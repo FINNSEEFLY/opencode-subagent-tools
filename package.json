@@ -70,7 +70,7 @@
     "typescript": "^7.0.2"
   },
   "prettier": {
-    "semi": false,
+    "semi": true,
     "printWidth": 90
   }
 }

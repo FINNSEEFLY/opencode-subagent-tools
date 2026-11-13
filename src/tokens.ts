@@ -4,35 +4,35 @@ import {
   type ModelRefLike,
   type TokenUsageLike,
   type UsageMessage,
-} from "./session"
+} from "./session";
 
 export interface TokenUsage {
-  input: number
-  output: number
-  reasoning: number
-  cache: { read: number; write: number }
+  input: number;
+  output: number;
+  reasoning: number;
+  cache: { read: number; write: number };
 }
 
 export interface LastRequestUsage {
-  input: number
-  output: number
-  reasoning: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
 }
 
 const isNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value)
+  typeof value === "number" && Number.isFinite(value);
 
 export const normalizeTokens = (value: unknown): TokenUsage | undefined => {
-  if (!value || typeof value !== "object") return undefined
-  const tokens = value as TokenUsageLike
-  const input = isNumber(tokens.input) ? tokens.input : undefined
-  const output = isNumber(tokens.output) ? tokens.output : undefined
-  const reasoning = isNumber(tokens.reasoning) ? tokens.reasoning : undefined
-  const cacheRead = isNumber(tokens.cache?.read) ? tokens.cache.read : undefined
-  const cacheWrite = isNumber(tokens.cache?.write) ? tokens.cache.write : undefined
+  if (!value || typeof value !== "object") return undefined;
+  const tokens = value as TokenUsageLike;
+  const input = isNumber(tokens.input) ? tokens.input : undefined;
+  const output = isNumber(tokens.output) ? tokens.output : undefined;
+  const reasoning = isNumber(tokens.reasoning) ? tokens.reasoning : undefined;
+  const cacheRead = isNumber(tokens.cache?.read) ? tokens.cache.read : undefined;
+  const cacheWrite = isNumber(tokens.cache?.write) ? tokens.cache.write : undefined;
 
   // An object with no numeric token fields is missing data, not zero usage.
   if (
@@ -42,7 +42,7 @@ export const normalizeTokens = (value: unknown): TokenUsage | undefined => {
     cacheRead === undefined &&
     cacheWrite === undefined
   ) {
-    return undefined
+    return undefined;
   }
 
   return {
@@ -53,21 +53,21 @@ export const normalizeTokens = (value: unknown): TokenUsage | undefined => {
       read: cacheRead ?? 0,
       write: cacheWrite ?? 0,
     },
-  }
-}
+  };
+};
 
 export const tokensUsed = (tokens: TokenUsage): number =>
-  tokens.input + tokens.output + tokens.reasoning
+  tokens.input + tokens.output + tokens.reasoning;
 
 export const tokensTotal = (tokens: TokenUsage): number =>
-  tokensUsed(tokens) + tokens.cache.read + tokens.cache.write
+  tokensUsed(tokens) + tokens.cache.read + tokens.cache.write;
 
 export const addTokens = (
   left?: TokenUsage,
   right?: TokenUsage,
 ): TokenUsage | undefined => {
-  if (!left) return right
-  if (!right) return left
+  if (!left) return right;
+  if (!right) return left;
   return {
     input: left.input + right.input,
     output: left.output + right.output,
@@ -76,24 +76,24 @@ export const addTokens = (
       read: left.cache.read + right.cache.read,
       write: left.cache.write + right.cache.write,
     },
-  }
-}
+  };
+};
 
 export const CONTEXT_USAGE = {
   usage: "usage",
   empty: "empty",
   missing: "missing",
-} as const
+} as const;
 
 export type ContextUsage =
   | {
-      kind: typeof CONTEXT_USAGE.usage
-      total: number
-      lastRequest: LastRequestUsage
-      model?: ModelRefLike
+      kind: typeof CONTEXT_USAGE.usage;
+      total: number;
+      lastRequest: LastRequestUsage;
+      model?: ModelRefLike;
     }
   | { kind: typeof CONTEXT_USAGE.empty }
-  | { kind: typeof CONTEXT_USAGE.missing }
+  | { kind: typeof CONTEXT_USAGE.missing };
 
 /**
  * Reproduce the UI's context number: the last assistant step after the last
@@ -108,31 +108,31 @@ export const contextFromMessages = (
   messages: readonly UsageMessage[],
   revertMessageID?: string,
 ): ContextUsage | undefined => {
-  let end = messages.length
+  let end = messages.length;
   if (revertMessageID) {
-    const boundary = messages.findIndex((message) => message?.id === revertMessageID)
-    if (boundary === -1) return undefined
-    end = boundary
+    const boundary = messages.findIndex((message) => message?.id === revertMessageID);
+    if (boundary === -1) return undefined;
+    end = boundary;
   }
 
-  let compactionIndex = -1
+  let compactionIndex = -1;
   for (let index = end - 1; index >= 0; index--) {
-    const message = messages[index]
-    if (!message) continue
+    const message = messages[index];
+    if (!message) continue;
     if (
       message.type === MESSAGE_TYPE.compaction &&
       message.status === MESSAGE_STATUS.completed
     ) {
-      compactionIndex = index
-      break
+      compactionIndex = index;
+      break;
     }
   }
 
   for (let index = end - 1; index > compactionIndex; index--) {
-    const message = messages[index]
-    if (!message || message.type !== MESSAGE_TYPE.assistant) continue
-    const tokens = normalizeTokens(message.tokens)
-    if (!tokens) return { kind: CONTEXT_USAGE.missing }
+    const message = messages[index];
+    if (!message || message.type !== MESSAGE_TYPE.assistant) continue;
+    const tokens = normalizeTokens(message.tokens);
+    if (!tokens) return { kind: CONTEXT_USAGE.missing };
     return {
       kind: CONTEXT_USAGE.usage,
       total: tokensTotal(tokens),
@@ -145,10 +145,10 @@ export const contextFromMessages = (
         total: tokensTotal(tokens),
       },
       model: message.model,
-    }
+    };
   }
-  return { kind: CONTEXT_USAGE.empty }
-}
+  return { kind: CONTEXT_USAGE.empty };
+};
 
 export const TOKEN_USAGE_SCHEMA = {
   type: "object",
@@ -168,4 +168,4 @@ export const TOKEN_USAGE_SCHEMA = {
   },
   required: ["input", "output", "reasoning", "cache"],
   additionalProperties: false,
-} as const
+} as const;

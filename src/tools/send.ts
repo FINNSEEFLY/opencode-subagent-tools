@@ -1,6 +1,6 @@
-import type { ToolEditor } from "@opencode/plugin/promise/tool"
-import type { Config } from "../config"
-import { toolError } from "../errors"
+import type { ToolEditor } from "@opencode/plugin/promise/tool";
+import type { Config } from "../config";
+import { toolError } from "../errors";
 import {
   CONTEXT_DELIVERY,
   DELIVERY,
@@ -10,35 +10,35 @@ import {
   type Delivery,
   type SendMessage,
   type SendResultFields,
-} from "../messages"
-import { CHILD_STATUSES } from "../status"
-import { maxLengthError, textLength } from "../text"
+} from "../messages";
+import { CHILD_STATUSES } from "../status";
+import { maxLengthError, textLength } from "../text";
 import {
   MAX_DESCRIPTION_LENGTH,
   readTextField,
   readToolInput,
   requireSessionID,
   requireText,
-} from "./input"
-import { TOOL } from "./names"
+} from "./input";
+import { TOOL } from "./names";
 import {
   formatPropertyDescription,
   resolveToolOutputStrategy,
   type OutputStrategy,
-} from "./output"
+} from "./output";
 
 export interface SendOutput extends SendResultFields {
-  sessionID: string
-  delivery: Delivery
-  chars: number
-  resume: boolean
+  sessionID: string;
+  delivery: Delivery;
+  chars: number;
+  resume: boolean;
 }
 
 export interface ContextOutput extends SendResultFields {
-  sessionID: string
-  delivery: typeof CONTEXT_DELIVERY
-  chars: number
-  description?: string
+  sessionID: string;
+  delivery: typeof CONTEXT_DELIVERY;
+  chars: number;
+  description?: string;
 }
 
 const SEND_OUTPUT_SCHEMA = {
@@ -65,7 +65,7 @@ const SEND_OUTPUT_SCHEMA = {
   },
   required: ["sessionID", "delivery", "chars", "resume"],
   additionalProperties: false,
-} as const
+} as const;
 
 const CONTEXT_OUTPUT_SCHEMA = {
   type: "object",
@@ -85,22 +85,22 @@ const CONTEXT_OUTPUT_SCHEMA = {
   },
   required: ["sessionID", "delivery", "chars"],
   additionalProperties: false,
-} as const
+} as const;
 
 export interface PromptSendConfig {
-  delivery: Delivery
-  failureLabel: string
-  outputStrategy: OutputStrategy
+  delivery: Delivery;
+  failureLabel: string;
+  outputStrategy: OutputStrategy;
 }
 
 const ADMITTED_LABEL: Record<Delivery, string> = {
   [DELIVERY.steer]: "Steering message sent to",
   [DELIVERY.queue]: "Message queued for",
-}
+};
 
 export interface SendDeps {
-  config: Config
-  sendMessage: SendMessage
+  config: Config;
+  sendMessage: SendMessage;
 }
 
 /**
@@ -114,14 +114,14 @@ const runPromptSend = async (
   config: PromptSendConfig,
   { config: pluginConfig, sendMessage }: SendDeps,
 ) => {
-  const { limits } = pluginConfig
-  const { outputStrategy } = config
-  const { input, format } = readToolInput(rawInput, outputStrategy)
-  const textError = maxLengthError(input.text, limits.maxTextLength, "text")
-  if (textError) return toolError(textError)
-  const sessionID = requireSessionID(input.sessionID)
-  const text = requireText(input.text, limits.maxTextLength)
-  const resume = input.resume === undefined ? true : input.resume === true
+  const { limits } = pluginConfig;
+  const { outputStrategy } = config;
+  const { input, format } = readToolInput(rawInput, outputStrategy);
+  const textError = maxLengthError(input.text, limits.maxTextLength, "text");
+  if (textError) return toolError(textError);
+  const sessionID = requireSessionID(input.sessionID);
+  const text = requireText(input.text, limits.maxTextLength);
+  const resume = input.resume === undefined ? true : input.resume === true;
   try {
     const result = await sendMessage(
       {
@@ -133,29 +133,29 @@ const runPromptSend = async (
       },
       context,
       config.failureLabel,
-    )
-    const delivery = result.admitted?.delivery ?? config.delivery
-    const admittedLabel = ADMITTED_LABEL[delivery]
-    const chars = textLength(result.admitted?.text ?? text)
+    );
+    const delivery = result.admitted?.delivery ?? config.delivery;
+    const admittedLabel = ADMITTED_LABEL[delivery];
+    const chars = textLength(result.admitted?.text ?? text);
     const output: SendOutput = {
       sessionID,
       delivery,
       chars,
       resume,
-    }
-    applySendResult(output, result)
+    };
+    applySendResult(output, result);
     return outputStrategy.respond(
       `${admittedLabel} ${sessionID}` +
         (result.admitted?.id ? ` as ${result.admitted.id}` : "") +
         ` (delivery=${delivery}, resume=${resume}, ${chars} chars).`,
       output,
       format,
-    )
+    );
   } catch (error) {
-    if (error instanceof SendAdmissionError) return toolError(error.message)
-    throw error
+    if (error instanceof SendAdmissionError) return toolError(error.message);
+    throw error;
   }
-}
+};
 
 const sendInputSchema = (
   outputStrategy: OutputStrategy,
@@ -183,11 +183,11 @@ const sendInputSchema = (
   },
   required: ["sessionID", "text"],
   additionalProperties: false,
-})
+});
 
 export const registerSteerTool = (editor: ToolEditor, deps: SendDeps) => {
-  const { allowedOutputFormats, limits } = deps.config
-  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.steer)
+  const { allowedOutputFormats, limits } = deps.config;
+  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.steer);
   editor.add({
     name: TOOL.steer,
     description:
@@ -215,12 +215,12 @@ export const registerSteerTool = (editor: ToolEditor, deps: SendDeps) => {
         },
         deps,
       ),
-  })
-}
+  });
+};
 
 export const registerQueueTool = (editor: ToolEditor, deps: SendDeps) => {
-  const { allowedOutputFormats, limits } = deps.config
-  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.queue)
+  const { allowedOutputFormats, limits } = deps.config;
+  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.queue);
   editor.add({
     name: TOOL.queue,
     description:
@@ -247,13 +247,13 @@ export const registerQueueTool = (editor: ToolEditor, deps: SendDeps) => {
         },
         deps,
       ),
-  })
-}
+  });
+};
 
 export const registerContextTool = (editor: ToolEditor, deps: SendDeps) => {
-  const { allowedOutputFormats, limits } = deps.config
-  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.context)
-  const { sendMessage } = deps
+  const { allowedOutputFormats, limits } = deps.config;
+  const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.context);
+  const { sendMessage } = deps;
 
   editor.add({
     name: TOOL.context,
@@ -287,18 +287,18 @@ export const registerContextTool = (editor: ToolEditor, deps: SendDeps) => {
     output: outputStrategy.schema(CONTEXT_OUTPUT_SCHEMA),
     options: { namespace: deps.config.namespace },
     execute: async (rawInput, context) => {
-      const { input, format } = readToolInput(rawInput, outputStrategy)
-      const textError = maxLengthError(input?.text, limits.maxTextLength, "text")
-      if (textError) return toolError(textError)
+      const { input, format } = readToolInput(rawInput, outputStrategy);
+      const textError = maxLengthError(input?.text, limits.maxTextLength, "text");
+      if (textError) return toolError(textError);
       const descriptionField = readTextField(
         input?.description,
         MAX_DESCRIPTION_LENGTH,
         "description",
-      )
-      if (descriptionField.error) return toolError(descriptionField.error)
-      const sessionID = requireSessionID(input?.sessionID)
-      const text = requireText(input?.text, limits.maxTextLength)
-      const description = descriptionField.text
+      );
+      if (descriptionField.error) return toolError(descriptionField.error);
+      const sessionID = requireSessionID(input?.sessionID);
+      const text = requireText(input?.text, limits.maxTextLength);
+      const description = descriptionField.text;
       try {
         const result = await sendMessage(
           {
@@ -310,26 +310,26 @@ export const registerContextTool = (editor: ToolEditor, deps: SendDeps) => {
           },
           context,
           "Context injection",
-        )
-        const chars = textLength(result.admitted?.text ?? text)
+        );
+        const chars = textLength(result.admitted?.text ?? text);
         const output: ContextOutput = {
           sessionID,
           delivery: CONTEXT_DELIVERY,
           chars,
-        }
-        if (description) output.description = description
-        applySendResult(output, result)
+        };
+        if (description) output.description = description;
+        applySendResult(output, result);
         return outputStrategy.respond(
           `Context injected into ${sessionID}` +
             (result.admitted?.id ? ` as ${result.admitted.id}` : "") +
             ` (${chars} chars).`,
           output,
           format,
-        )
+        );
       } catch (error) {
-        if (error instanceof SendAdmissionError) return toolError(error.message)
-        throw error
+        if (error instanceof SendAdmissionError) return toolError(error.message);
+        throw error;
       }
     },
-  })
-}
+  });
+};

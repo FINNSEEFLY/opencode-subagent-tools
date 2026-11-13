@@ -6,6 +6,6 @@ export const TOOL = {
   queue: "queue",
   context: "context",
   usage: "usage",
-} as const
+} as const;
 
-export type ToolName = (typeof TOOL)[keyof typeof TOOL]
+export type ToolName = (typeof TOOL)[keyof typeof TOOL];

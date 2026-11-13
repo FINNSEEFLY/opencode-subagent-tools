@@ -31,54 +31,54 @@
  * Requires an OpenCode build with `ctx.session.list`.
  */
 
-import { Plugin } from "@opencode/plugin"
-import { createAccess } from "./access"
-import { resolveConfig } from "./config"
-import { createDiscovery } from "./discovery"
-import { OPENCODE_REQUIREMENT } from "./errors"
-import { startEventStream, type EventApi } from "./events"
-import { createLiveState } from "./live-state"
-import { createSendMessage } from "./messages"
-import { createGuard } from "./permissions"
-import type { SessionList } from "./session"
-import { registerSkill } from "./skill"
-import { registerTools } from "./tools"
+import { Plugin } from "@opencode/plugin";
+import { createAccess } from "./access";
+import { resolveConfig } from "./config";
+import { createDiscovery } from "./discovery";
+import { OPENCODE_REQUIREMENT } from "./errors";
+import { startEventStream, type EventApi } from "./events";
+import { createLiveState } from "./live-state";
+import { createSendMessage } from "./messages";
+import { createGuard } from "./permissions";
+import type { SessionList } from "./session";
+import { registerSkill } from "./skill";
+import { registerTools } from "./tools";
 
 export default Plugin.define({
   id: "subagent-tools",
 
   async setup(ctx) {
-    const config = resolveConfig(ctx.options)
+    const config = resolveConfig(ctx.options);
 
-    const rawSessionList = (ctx.session as { list?: unknown }).list
+    const rawSessionList = (ctx.session as { list?: unknown }).list;
     const sessionList =
       typeof rawSessionList === "function"
         ? (rawSessionList.bind(ctx.session) as SessionList)
-        : undefined
-    if (!sessionList) throw new Error(OPENCODE_REQUIREMENT)
+        : undefined;
+    if (!sessionList) throw new Error(OPENCODE_REQUIREMENT);
 
-    const live = createLiveState()
+    const live = createLiveState();
     const discovery = createDiscovery({
       sessionList,
       live,
       limits: config.limits,
-    })
+    });
     const access = createAccess({
       session: ctx.session,
       limits: config.limits,
       policy: config.sessionControlPolicy,
       namespace: config.namespace,
-    })
+    });
     const guard = createGuard({
       permission: ctx.permission,
       enabled: config.enforcePermissions,
-    })
+    });
     const sendMessage = createSendMessage({
       session: ctx.session,
       access,
       guard,
       live,
-    })
+    });
 
     const toolsRegistration = await ctx.tool.transform((editor) => {
       registerTools(editor, {
@@ -90,27 +90,27 @@ export default Plugin.define({
         sendMessage,
         session: ctx.session,
         model: ctx.model,
-      })
-    })
+      });
+    });
 
     const skillRegistration = config.registerSkill
       ? await registerSkill(ctx.skill)
-      : undefined
+      : undefined;
 
     // Start the event stream only after tool registration succeeded, so a setup
     // failure cannot leave a background subscriber behind.
-    const eventsAbort = new AbortController()
+    const eventsAbort = new AbortController();
     startEventStream({
       event: ctx.event as unknown as EventApi | undefined,
       live,
       signal: eventsAbort.signal,
-    })
+    });
 
     // Stop the event stream when the plugin unloads or its config reloads.
     return async () => {
-      eventsAbort.abort()
-      if (skillRegistration) await skillRegistration.dispose().catch(() => undefined)
-      await toolsRegistration.dispose().catch(() => undefined)
-    }
+      eventsAbort.abort();
+      if (skillRegistration) await skillRegistration.dispose().catch(() => undefined);
+      await toolsRegistration.dispose().catch(() => undefined);
+    };
   },
-})
+});
