@@ -1,5 +1,10 @@
 import type { SessionInfoLike } from "./session";
-import { STATUS, TERMINAL_STATUSES, statusFromSession, type ChildStatus } from "./status";
+import {
+  RUN_STATUS,
+  TERMINAL_RUN_STATUSES,
+  runStatusFromSession,
+  type RunStatus,
+} from "./status";
 
 export const MAX_LIVE_SESSIONS = 500;
 
@@ -7,7 +12,7 @@ export const MAX_LIVE_SESSIONS = 500;
 export interface LiveState {
   /** Last live start timestamp; 0 when the last observed transition was terminal. */
   activeAt: number;
-  status?: ChildStatus;
+  status?: RunStatus;
   /** Last live start/terminal timestamp, used to drop out-of-order events. */
   lastStartedAt: number;
   lastTerminalAt: number;
@@ -37,17 +42,17 @@ export const createLiveState = () => {
   };
 
   const rememberStarted = (id: string, at: number) => {
-    rememberLive(id, { activeAt: at, status: STATUS.running, lastStartedAt: at });
+    rememberLive(id, { activeAt: at, status: RUN_STATUS.running, lastStartedAt: at });
   };
 
-  const rememberTerminal = (id: string, status: ChildStatus, at: number) => {
+  const rememberTerminal = (id: string, status: RunStatus, at: number) => {
     rememberLive(id, { activeAt: 0, status, lastTerminalAt: at });
   };
 
-  const liveStatusFor = (id: string): ChildStatus | undefined => {
+  const liveStatusFor = (id: string): RunStatus | undefined => {
     const state = live.get(id);
     if (!state) return undefined;
-    if (state.activeAt > 0) return STATUS.running;
+    if (state.activeAt > 0) return RUN_STATUS.running;
     return state.status;
   };
 
@@ -56,25 +61,25 @@ export const createLiveState = () => {
    * stale outcome), then a live terminal or idle event at least as new as the
    * marker. Everything else falls back to the session record.
    */
-  const statusFor = (info: SessionInfoLike, id: string): ChildStatus => {
+  const statusFor = (info: SessionInfoLike, id: string): RunStatus => {
     const state = live.get(id);
     // `time.idle` is the canonical terminal marker. When it is absent, use
     // `time.updated` as a conservative marker so a stale live event cannot
     // override a newer session record.
     const marker = info.time?.idle ?? info.time?.updated ?? 0;
     const activeAt = state?.activeAt ?? 0;
-    if (activeAt > 0 && (marker === 0 || activeAt > marker)) return STATUS.running;
+    if (activeAt > 0 && (marker === 0 || activeAt > marker)) return RUN_STATUS.running;
 
     const liveStatus = state?.status;
     const liveAt = state?.lastTerminalAt ?? 0;
     if (liveStatus !== undefined) {
       const terminal =
-        TERMINAL_STATUSES.has(liveStatus) ||
-        (liveStatus === STATUS.unknown && liveAt > 0);
+        TERMINAL_RUN_STATUSES.has(liveStatus) ||
+        (liveStatus === RUN_STATUS.unknown && liveAt > 0);
       if (terminal && (marker === 0 || liveAt >= marker)) return liveStatus;
     }
 
-    return statusFromSession(info) ?? STATUS.unknown;
+    return runStatusFromSession(info) ?? RUN_STATUS.unknown;
   };
 
   return {

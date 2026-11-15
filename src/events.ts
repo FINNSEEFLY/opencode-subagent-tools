@@ -2,9 +2,9 @@ import type { LiveStore } from "./live-state";
 import { normalizeSessionID } from "./session";
 import {
   BUSY_SESSION_STATUSES,
-  SESSION_STATUS,
-  STATUS,
-  type ChildStatus,
+  OPENCODE_SESSION_STATUS,
+  RUN_STATUS,
+  type RunStatus,
 } from "./status";
 
 export const EVENT = {
@@ -30,16 +30,16 @@ const EVENT_KIND = {
 type EventMeta =
   | { kind: typeof EVENT_KIND.status }
   | { kind: typeof EVENT_KIND.started }
-  | { kind: typeof EVENT_KIND.terminal; status: ChildStatus };
+  | { kind: typeof EVENT_KIND.terminal; status: RunStatus };
 
 export const EVENT_META: Readonly<Record<EventType, EventMeta>> = {
   [EVENT.status]: { kind: EVENT_KIND.status },
   [EVENT.executionStarted]: { kind: EVENT_KIND.started },
-  [EVENT.executionSucceeded]: { kind: EVENT_KIND.terminal, status: STATUS.finished },
-  [EVENT.executionFailed]: { kind: EVENT_KIND.terminal, status: STATUS.failed },
-  [EVENT.executionInterrupted]: { kind: EVENT_KIND.terminal, status: STATUS.stopped },
-  [EVENT.deleted]: { kind: EVENT_KIND.terminal, status: STATUS.stopped },
-  [EVENT.idle]: { kind: EVENT_KIND.terminal, status: STATUS.unknown },
+  [EVENT.executionSucceeded]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.finished },
+  [EVENT.executionFailed]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.failed },
+  [EVENT.executionInterrupted]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.stopped },
+  [EVENT.deleted]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.stopped },
+  [EVENT.idle]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.unknown },
 };
 
 const EVENT_META_MAP: ReadonlyMap<string, EventMeta> = new Map(
@@ -48,7 +48,7 @@ const EVENT_META_MAP: ReadonlyMap<string, EventMeta> = new Map(
 
 export const EVENT_TYPES: readonly EventType[] = Object.keys(EVENT_META) as EventType[];
 
-export const TERMINAL_EVENT_STATUS: ReadonlyMap<string, ChildStatus> = new Map(
+export const TERMINAL_EVENT_STATUS: ReadonlyMap<string, RunStatus> = new Map(
   Object.entries(EVENT_META)
     .filter(
       (entry): entry is [string, Extract<EventMeta, { kind: "terminal" }>] =>
@@ -117,10 +117,10 @@ export const handleEvent = (live: LiveStore, event: EventLike) => {
     if (BUSY_SESSION_STATUSES.has(kind)) {
       if (eventAt <= live.lastTransitionAt(id)) return;
       live.rememberStarted(id, eventAt);
-    } else if (kind === SESSION_STATUS.idle) {
+    } else if (kind === OPENCODE_SESSION_STATUS.idle) {
       if (eventAt < live.lastTransitionAt(id)) return;
-      if ((previous?.activeAt ?? 0) > 0 || previous?.status === STATUS.running) {
-        live.rememberTerminal(id, STATUS.unknown, eventAt);
+      if ((previous?.activeAt ?? 0) > 0 || previous?.status === RUN_STATUS.running) {
+        live.rememberTerminal(id, RUN_STATUS.unknown, eventAt);
       }
     }
     return;
@@ -134,9 +134,9 @@ export const handleEvent = (live: LiveStore, event: EventLike) => {
 
   if (eventAt < live.lastTransitionAt(id)) return;
   if (
-    meta.status === STATUS.unknown &&
+    meta.status === RUN_STATUS.unknown &&
     (previous?.activeAt ?? 0) === 0 &&
-    previous?.status !== STATUS.running
+    previous?.status !== RUN_STATUS.running
   )
     return;
   live.rememberTerminal(id, meta.status, eventAt);

@@ -8,7 +8,12 @@ import { errorMessage, toolError } from "../errors";
 import { INTERRUPT_OUTCOME, interruptOutcome } from "../interrupt";
 import type { LiveStore } from "../live-state";
 import { guardTarget, type Guard } from "../permissions";
-import { CHILD_STATUSES, STATUS, TERMINAL_STATUSES, type ChildStatus } from "../status";
+import {
+  RUN_STATUSES,
+  RUN_STATUS,
+  TERMINAL_RUN_STATUSES,
+  type RunStatus,
+} from "../status";
 import { MAX_REASON_LENGTH, readTextField, readToolInput } from "./input";
 import { TOOL } from "./names";
 import { formatPropertyDescription, resolveToolOutputStrategy } from "./output";
@@ -29,7 +34,7 @@ export interface CancelDescendantsTarget {
   sessionID: string;
   interrupt: CancelInterrupt;
   readBack: CancelReadBack;
-  status?: ChildStatus;
+  status?: RunStatus;
   error?: string;
 }
 
@@ -62,7 +67,7 @@ const CANCEL_DESCENDANTS_TARGET_SCHEMA = {
       description:
         "ok: status check succeeded and status is set; failed: status check failed; not-read: not attempted or aborted.",
     },
-    status: { type: "string", enum: [...CHILD_STATUSES] },
+    status: { type: "string", enum: [...RUN_STATUSES] },
     error: { type: "string" },
   },
   required: ["sessionID", "interrupt", "readBack"],
@@ -115,7 +120,7 @@ const CANCEL_DESCENDANTS_OUTPUT_SCHEMA = {
 const isTerminalTarget = (target: CancelDescendantsTarget): boolean =>
   target.readBack === CANCEL_READ_BACK.ok &&
   target.status !== undefined &&
-  TERMINAL_STATUSES.has(target.status);
+  TERMINAL_RUN_STATUSES.has(target.status);
 
 const INTERRUPT_SUMMARY_LABEL: Readonly<Record<CancelInterrupt, string>> = {
   [CANCEL_INTERRUPT.accepted]: "interrupt accepted",
@@ -174,7 +179,7 @@ const INTERRUPT_DETAIL: ReadonlyMap<CancelInterrupt, TargetDetail> = new Map([
     CANCEL_INTERRUPT.rejected,
     (target: CancelDescendantsTarget) =>
       READ_BACK_DETAIL.get(target.readBack) ??
-      (target.status === STATUS.running
+      (target.status === RUN_STATUS.running
         ? "interrupt rejected; state still says running"
         : undefined),
   ],
@@ -189,8 +194,8 @@ const INTERRUPT_DETAIL: ReadonlyMap<CancelInterrupt, TargetDetail> = new Map([
 const targetDetail = (target: CancelDescendantsTarget): string => {
   const detail = INTERRUPT_DETAIL.get(target.interrupt)?.(target);
   if (detail) return detail;
-  if (target.status === STATUS.running) return "still running";
-  if (target.status === STATUS.unknown) return "status unknown";
+  if (target.status === RUN_STATUS.running) return "still running";
+  if (target.status === RUN_STATUS.unknown) return "status unknown";
   return target.status ?? "status unavailable";
 };
 
@@ -211,7 +216,7 @@ export const summarizeCancelDescendants = (
   const terminal = targets.filter(isTerminalTarget).length;
   const stillRunning = targets.filter(
     (target) =>
-      target.readBack === CANCEL_READ_BACK.ok && target.status === STATUS.running,
+      target.readBack === CANCEL_READ_BACK.ok && target.status === RUN_STATUS.running,
   ).length;
   const readBackNotRead = targets.filter(
     (target) =>
@@ -221,7 +226,7 @@ export const summarizeCancelDescendants = (
   ).length;
   const statusUnknown = targets.filter(
     (target) =>
-      target.readBack === CANCEL_READ_BACK.ok && target.status === STATUS.unknown,
+      target.readBack === CANCEL_READ_BACK.ok && target.status === RUN_STATUS.unknown,
   ).length;
 
   const accepted = interruptCounts.get(CANCEL_INTERRUPT.accepted) ?? 0;
@@ -353,13 +358,13 @@ export const registerCancelDescendantsTool = (
       const afterCursor = cursor
         ? known.filter((row) => isAfterCursor(row, cursor))
         : known;
-      const running = afterCursor.filter((row) => row.status === STATUS.running);
+      const running = afterCursor.filter((row) => row.status === RUN_STATUS.running);
       const beforeCursorRunning = cursor
         ? known.filter(
             (row) =>
               !(row.launchedAt === cursor.launchedAt && row.id === cursor.id) &&
               !isAfterCursor(row, cursor) &&
-              row.status === STATUS.running,
+              row.status === RUN_STATUS.running,
           ).length
         : 0;
       const cursorNote =

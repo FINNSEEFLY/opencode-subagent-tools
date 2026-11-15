@@ -1,6 +1,6 @@
 import { afterEach } from "bun:test";
 import plugin from "../src/index";
-import { CHILD_STATUSES } from "../src/status";
+import { RUN_STATUSES } from "../src/status";
 
 export type Event = Record<string, any>;
 
@@ -215,7 +215,7 @@ export function makeHarness(input: HarnessOptions = {}) {
 
 export type Harness = ReturnType<typeof makeHarness>;
 
-export const ALL_STATUSES = [...CHILD_STATUSES];
+export const ALL_STATUSES = [...RUN_STATUSES];
 
 export const createChild = (
   h: Harness,

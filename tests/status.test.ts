@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   OUTCOME,
-  OUTCOME_STATUS,
-  STATUS,
+  OUTCOME_RUN_STATUS,
+  RUN_STATUS,
   isOutcome,
-  statusFromSession,
+  runStatusFromSession,
 } from "../src/status";
 import {
   makeHarness,
@@ -395,24 +395,24 @@ describe("status and freshness", () => {
   test("maps every known outcome and rejects unknown ones", () => {
     for (const outcome of Object.values(OUTCOME)) {
       expect(isOutcome(outcome)).toBe(true);
-      expect(OUTCOME_STATUS[outcome]).toBeDefined();
+      expect(OUTCOME_RUN_STATUS[outcome]).toBeDefined();
     }
     expect(isOutcome("cancelled")).toBe(false);
   });
 
   test("an unknown outcome is reported as unknown, not guessed", () => {
-    const status = statusFromSession({
+    const status = runStatusFromSession({
       outcome: "cancelled",
       time: { created: 1, updated: 2 },
     });
-    expect(status).toBe(STATUS.unknown);
+    expect(status).toBe(RUN_STATUS.unknown);
   });
 
   test("a resumed run still wins over an unknown outcome", () => {
-    const status = statusFromSession({
+    const status = runStatusFromSession({
       outcome: "cancelled",
       time: { created: 1, updated: 20, busy: 20, idle: 10 },
     });
-    expect(status).toBe(STATUS.running);
+    expect(status).toBe(RUN_STATUS.running);
   });
 });

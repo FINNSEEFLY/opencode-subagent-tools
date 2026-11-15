@@ -11,7 +11,7 @@ import {
   type SendMessage,
   type SendResultFields,
 } from "../messages";
-import { CHILD_STATUSES } from "../status";
+import { RUN_STATUSES } from "../status";
 import { maxLengthError, textLength } from "../text";
 import {
   MAX_DESCRIPTION_LENGTH,
@@ -54,7 +54,7 @@ const SEND_OUTPUT_SCHEMA = {
     },
     status: {
       type: "string",
-      enum: [...CHILD_STATUSES],
+      enum: [...RUN_STATUSES],
       description:
         "Status observed before the message was accepted; a wake may not be reflected yet.",
     },
@@ -77,7 +77,7 @@ const CONTEXT_OUTPUT_SCHEMA = {
     description: { type: "string" },
     status: {
       type: "string",
-      enum: [...CHILD_STATUSES],
+      enum: [...RUN_STATUSES],
       description:
         "Status observed before the message was accepted; context does not wake the child.",
     },

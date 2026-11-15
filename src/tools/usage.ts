@@ -12,7 +12,12 @@ import type {
   SessionInfoLike,
   UsageMessage,
 } from "../session";
-import { CHILD_STATUSES, STATUS, statusUsageMayLag, type ChildStatus } from "../status";
+import {
+  RUN_STATUSES,
+  RUN_STATUS,
+  runStatusUsageMayLag,
+  type RunStatus,
+} from "../status";
 import {
   CONTEXT_USAGE,
   TOKEN_USAGE_SCHEMA,
@@ -46,7 +51,7 @@ export interface TreeUsage {
 export interface UsageOutput {
   sessionID: string;
   parentID?: string;
-  status: ChildStatus;
+  status: RunStatus;
   /** Usage is as of the last persisted step; running/unknown sessions may lag. */
   usageMayLag?: boolean;
   costUSD?: number;
@@ -68,7 +73,7 @@ const USAGE_OUTPUT_SCHEMA = {
     parentID: { type: "string" },
     status: {
       type: "string",
-      enum: [...CHILD_STATUSES],
+      enum: [...RUN_STATUSES],
       description: "Observed status; the calling session is reported as running.",
     },
     usageMayLag: {
@@ -208,9 +213,9 @@ export const registerUsageTool = (
       // persisted run ended earlier. Do not report a finished status for self.
       const status =
         context?.sessionID === sessionID
-          ? STATUS.running
+          ? RUN_STATUS.running
           : live.statusFor(info, sessionID);
-      const usageMayLag = statusUsageMayLag(status);
+      const usageMayLag = runStatusUsageMayLag(status);
       const ownTokens = normalizeTokens(info.tokens);
       const ownCost =
         typeof info.cost === "number" && Number.isFinite(info.cost)
@@ -308,7 +313,7 @@ export const registerUsageTool = (
           descendants++;
           if (row.cost !== undefined) costUSD += row.cost;
           if (row.tokens) tokens = addTokens(tokens, row.tokens);
-          if (statusUsageMayLag(row.status)) descendantsMayLag = true;
+          if (runStatusUsageMayLag(row.status)) descendantsMayLag = true;
         }
         tree = {
           sessions,

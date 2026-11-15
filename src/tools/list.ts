@@ -8,10 +8,10 @@ import { age, ageSeconds, compactNumber, formatCost } from "../format";
 import { MAX_PROMPT_PREVIEW_LENGTH } from "../session";
 import type { SessionRow } from "../session-row";
 import {
-  CHILD_STATUSES,
-  isChildStatus,
-  statusUsageMayLag,
-  type ChildStatus,
+  RUN_STATUSES,
+  isRunStatus,
+  runStatusUsageMayLag,
+  type RunStatus,
 } from "../status";
 import { clip, isUnsafeControlCode } from "../text";
 import { TOKEN_USAGE_SCHEMA, tokensUsed, type TokenUsage } from "../tokens";
@@ -19,7 +19,7 @@ import { readOptionalSessionID, readToolInput } from "./input";
 import { TOOL } from "./names";
 import { formatPropertyDescription, resolveToolOutputStrategy } from "./output";
 
-const STATUS_COLUMN_WIDTH = Math.max(...CHILD_STATUSES.map((status) => status.length));
+const STATUS_COLUMN_WIDTH = Math.max(...RUN_STATUSES.map((status) => status.length));
 const DISCOVERY_WARNING = "discovery was incomplete; some subagents may be missing.";
 const DISCOVERY_WARNING_TEXT = `\nWarning: ${DISCOVERY_WARNING}`;
 
@@ -35,7 +35,7 @@ export interface ListRowOutput {
   agent?: string;
   title?: string;
   titleTruncated?: boolean;
-  status: ChildStatus;
+  status: RunStatus;
   ageSeconds?: number;
   launchedAt: number;
   /** Usage is as of the last persisted step; running/unknown children may lag. */
@@ -45,7 +45,7 @@ export interface ListRowOutput {
 
 export interface ListOutput {
   root: string;
-  statuses: ChildStatus[];
+  statuses: RunStatus[];
   discoveryComplete: boolean;
   warning?: string;
   known: number;
@@ -54,7 +54,7 @@ export interface ListOutput {
   remaining: number;
   remainingPages: number;
   cursor?: string;
-  counts: Record<ChildStatus, number>;
+  counts: Record<RunStatus, number>;
   rows: ListRowOutput[];
 }
 
@@ -74,7 +74,7 @@ const LIST_OUTPUT_SCHEMA = {
     root: { type: "string" },
     statuses: {
       type: "array",
-      items: { type: "string", enum: [...CHILD_STATUSES] },
+      items: { type: "string", enum: [...RUN_STATUSES] },
     },
     discoveryComplete: {
       type: "boolean",
@@ -110,9 +110,9 @@ const LIST_OUTPUT_SCHEMA = {
       description:
         "Counts for all discovered sessions, before the status filter and cursor.",
       properties: Object.fromEntries(
-        CHILD_STATUSES.map((status) => [status, { type: "integer" }]),
+        RUN_STATUSES.map((status) => [status, { type: "integer" }]),
       ),
-      required: [...CHILD_STATUSES],
+      required: [...RUN_STATUSES],
       additionalProperties: false,
     },
     rows: {
@@ -125,7 +125,7 @@ const LIST_OUTPUT_SCHEMA = {
           agent: { type: "string" },
           title: { type: "string" },
           titleTruncated: { type: "boolean" },
-          status: { type: "string", enum: [...CHILD_STATUSES] },
+          status: { type: "string", enum: [...RUN_STATUSES] },
           ageSeconds: { type: "integer" },
           launchedAt: { type: "number" },
           usageMayLag: {
@@ -156,18 +156,18 @@ const LIST_OUTPUT_SCHEMA = {
 
 const requestedStatuses = (
   value: unknown,
-): { statuses: Set<ChildStatus>; invalid: string[]; error?: string } => {
+): { statuses: Set<RunStatus>; invalid: string[]; error?: string } => {
   if (value === undefined) {
-    return { statuses: new Set(CHILD_STATUSES), invalid: [] };
+    return { statuses: new Set(RUN_STATUSES), invalid: [] };
   }
   if (!Array.isArray(value)) {
     return {
-      statuses: new Set<ChildStatus>(),
+      statuses: new Set<RunStatus>(),
       invalid: [],
       error: "statuses must be an array of statuses; omit it to include all.",
     };
   }
-  const valid: ChildStatus[] = [];
+  const valid: RunStatus[] = [];
   const invalid: string[] = [];
   for (const raw of value) {
     if (typeof raw !== "string") {
@@ -175,7 +175,7 @@ const requestedStatuses = (
       continue;
     }
     const status = raw.trim().toLowerCase();
-    if (isChildStatus(status)) valid.push(status);
+    if (isRunStatus(status)) valid.push(status);
     else if (status.length > 0) invalid.push(raw);
   }
   return {
@@ -184,8 +184,8 @@ const requestedStatuses = (
   };
 };
 
-const statusesLabel = (statuses: Set<ChildStatus>): string =>
-  statuses.size === CHILD_STATUSES.length ? "all" : [...statuses].join(", ");
+const statusesLabel = (statuses: Set<RunStatus>): string =>
+  statuses.size === RUN_STATUSES.length ? "all" : [...statuses].join(", ");
 
 const escapeText = (value: string): string =>
   Array.from(
@@ -198,7 +198,7 @@ const escapeText = (value: string): string =>
     .join("");
 
 const rowText = (row: SessionRow): string => {
-  const usageMayLag = statusUsageMayLag(row.status);
+  const usageMayLag = runStatusUsageMayLag(row.status);
   const title = clip(row.title, MAX_PROMPT_PREVIEW_LENGTH);
   return [
     escapeText(row.id),
@@ -215,10 +215,11 @@ const rowText = (row: SessionRow): string => {
     .join("  ");
 };
 
-const countStatuses = (rows: readonly SessionRow[]): Record<ChildStatus, number> => {
-  const counts = Object.fromEntries(
-    CHILD_STATUSES.map((status) => [status, 0]),
-  ) as Record<ChildStatus, number>;
+const countStatuses = (rows: readonly SessionRow[]): Record<RunStatus, number> => {
+  const counts = Object.fromEntries(RUN_STATUSES.map((status) => [status, 0])) as Record<
+    RunStatus,
+    number
+  >;
   for (const row of rows) counts[row.status]++;
   return counts;
 };
@@ -234,7 +235,7 @@ const rowOutput = (row: SessionRow): ListRowOutput => {
   if (row.title !== undefined) output.title = row.title;
   if (row.titleTruncated) output.titleTruncated = true;
   if (row.launchedAt > 0) output.ageSeconds = ageSeconds(row.launchedAt);
-  if (statusUsageMayLag(row.status)) {
+  if (runStatusUsageMayLag(row.status)) {
     output.usageMayLag = true;
   }
   if (row.cost !== undefined || row.tokens) {
@@ -316,8 +317,8 @@ export const registerListTool = (
         statuses: {
           type: "array",
           minItems: 1,
-          maxItems: CHILD_STATUSES.length,
-          items: { type: "string", enum: [...CHILD_STATUSES] },
+          maxItems: RUN_STATUSES.length,
+          items: { type: "string", enum: [...RUN_STATUSES] },
           description:
             "Statuses to include. Omit to include all statuses; pass one or more to filter. An empty array is rejected.",
         },
@@ -357,13 +358,13 @@ export const registerListTool = (
             ? `, and ${statusFilter.invalid.length - 5} more`
             : "";
         return toolError(
-          `Unknown status(es): ${shown}${more}. Use one or more of: ${CHILD_STATUSES.join(", ")}.`,
+          `Unknown status(es): ${shown}${more}. Use one or more of: ${RUN_STATUSES.join(", ")}.`,
         );
       }
       const statuses = statusFilter.statuses;
       if (statuses.size === 0) {
         return toolError(
-          `statuses must contain at least one status. Omit statuses to include all, or pass one or more of: ${CHILD_STATUSES.join(", ")}.`,
+          `statuses must contain at least one status. Omit statuses to include all, or pass one or more of: ${RUN_STATUSES.join(", ")}.`,
         );
       }
       const limit = limitInteger(input?.limit, limits.maxListRows, 1, limits.maxListRows);

@@ -5,7 +5,7 @@ import {
   normalizeSessionID,
   type SessionInfoLike,
 } from "./session";
-import type { ChildStatus } from "./status";
+import type { RunStatus } from "./status";
 import { clip, textLength } from "./text";
 import { normalizeTokens, type TokenUsage } from "./tokens";
 
@@ -16,7 +16,7 @@ export interface SessionRow {
   title?: string;
   titleTruncated?: boolean;
   launchedAt: number;
-  status: ChildStatus;
+  status: RunStatus;
   cost?: number;
   tokens?: TokenUsage;
 }

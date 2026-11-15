@@ -4,7 +4,7 @@ import { errorMessage } from "./errors";
 import type { LiveStore } from "./live-state";
 import type { Guard } from "./permissions";
 import { guardTarget } from "./permissions";
-import { statusIsIdle, type ChildStatus } from "./status";
+import { runStatusIsIdle, type RunStatus } from "./status";
 import type { ToolCtx } from "./tools/input";
 
 export const DELIVERY = {
@@ -37,7 +37,7 @@ export const CONTEXT_DELIVERY = "next-step" as const;
 
 export interface SendResultFields {
   messageID?: string;
-  status?: ChildStatus;
+  status?: RunStatus;
   pending?: boolean;
 }
 
@@ -70,7 +70,7 @@ export interface AdmittedMessage {
 
 export interface SendResult {
   admitted?: AdmittedMessage;
-  status?: ChildStatus;
+  status?: RunStatus;
   pending: boolean;
 }
 
@@ -188,7 +188,7 @@ export const createSendMessage = ({ session, access, guard, live }: SendDeps) =>
       : live.liveStatusFor(request.sessionID);
     // `unknown` is not idle: the session may still be running, so a message
     // without resume cannot be reported as pending.
-    const pending = statusIsIdle(status) && !request.resume;
+    const pending = runStatusIsIdle(status) && !request.resume;
     return { admitted: admittedFrom(admitted), status, pending };
   };
 };
