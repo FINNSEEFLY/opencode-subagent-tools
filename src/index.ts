@@ -28,7 +28,7 @@
  * through `ctx.permission.assert` with the action `subagent.control`.
  * `cancel_descendants` checks the whole batch in one permission request.
  *
- * Requires an OpenCode build with `ctx.session.list`.
+ * Requires OpenCode 2.3.0+ with `ctx.session.list`.
  */
 
 import { Plugin } from "@opencode/plugin";

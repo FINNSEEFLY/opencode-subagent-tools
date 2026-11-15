@@ -13,8 +13,5 @@ jobs:
         with:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
-      - run: bun run lint
-      - run: bun run format:check
-      - run: bun run typecheck
-      - run: bun test
+      - run: bun run check
       - run: npm pack --dry-run
