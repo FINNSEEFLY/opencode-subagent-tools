@@ -16,6 +16,8 @@ export interface ToolInput {
   reason?: string;
   description?: string;
   statuses?: string[];
+  active?: boolean;
+  subtreeActive?: boolean;
   limit?: number;
   cursor?: string;
   format?: ResponseFormat;

@@ -530,6 +530,12 @@ describe("structured output", () => {
     expect(result.output.remainingPages).toBe(0);
     expect(result.output.counts.running).toBe(1);
     expect(result.output.counts.finished).toBe(1);
+    expect(
+      Object.values(result.output.counts as Record<string, number>).reduce(
+        (sum, count) => sum + count,
+        0,
+      ),
+    ).toBe(result.output.known);
     expect(result.output.rows).toHaveLength(2);
     expect(h.tools.get("list").output).toBeDefined();
   });

@@ -618,3 +618,86 @@ describe("cancel_descendants", () => {
     expect(text).toContain("ses_y (still running)");
   });
 });
+
+describe("cancel_descendants background activity", () => {
+  const finished = (id: string, parentID: string) =>
+    sessionInfo(id, parentID, {
+      outcome: "succeeded",
+      time: { created: 1, updated: 2, idle: 2 },
+    });
+
+  test("reports background jobs when no execution is running", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
+
+    const result = await h.tools
+      .get("cancel_descendants")
+      .execute({ format: "json" }, { sessionID: "ses_parent" });
+    expect(h.calls.interrupt).toHaveLength(0);
+    expect(result.output.running).toBe(0);
+    expect(result.output.activeCount).toBe(1);
+    expect(result.output.subtreeActiveCount).toBe(1);
+    expect(result.output.backgroundJobCount).toBe(1);
+    expect(result.output.backgroundJobMayRemain).toBe(true);
+    expect(result.output.targets).toEqual([]);
+    expect(result.content).toContain(
+      "idle subagent(s) own background jobs that this tool cannot stop",
+    );
+    expect(result.content).toContain("Background work may remain");
+  });
+
+  test("a running target reports its own background job", async () => {
+    const h = makeHarness();
+    createChild(h, "ses_child", "ses_parent");
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
+
+    const result = await h.tools
+      .get("cancel_descendants")
+      .execute({ format: "json" }, { sessionID: "ses_parent" });
+    expect(h.calls.interrupt).toEqual([{ sessionID: "ses_child", resume: false }]);
+    expect(result.output.targets[0].backgroundJob).toEqual({
+      kinds: ["shell"],
+      mayRemain: true,
+    });
+    expect(result.output.backgroundJobCount).toBe(0);
+    expect(result.output.backgroundJobMayRemain).toBe(true);
+    expect(result.content).toContain("background=shell cannot be stopped");
+  });
+
+  test("an idle parent with a running grandchild is not a target", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_mid", finished("ses_mid", "ses_parent"));
+    createChild(h, "ses_leaf", "ses_mid");
+    cleanups.push(await h.setup());
+
+    const result = await h.tools
+      .get("cancel_descendants")
+      .execute({ format: "json" }, { sessionID: "ses_parent" });
+    expect(h.calls.interrupt).toEqual([{ sessionID: "ses_leaf", resume: false }]);
+    expect(result.output.running).toBe(1);
+    expect(result.output.activeCount).toBe(1);
+    expect(result.output.subtreeActiveCount).toBe(2);
+    expect(result.output.backgroundJobCount).toBe(0);
+    expect(result.output.backgroundJobMayRemain).toBeUndefined();
+    expect(result.content).toContain(
+      "1 idle parent(s) have active descendants and may wake",
+    );
+  });
+});

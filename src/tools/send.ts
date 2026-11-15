@@ -1,8 +1,10 @@
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
+import { BACKGROUND_JOB_SCHEMA } from "../background";
 import type { Config } from "../config";
 import { toolError } from "../errors";
 import {
   CONTEXT_DELIVERY,
+  CONTEXT_METADATA_SOURCE,
   DELIVERY,
   SEND_KIND,
   SendAdmissionError,
@@ -41,29 +43,51 @@ export interface ContextOutput extends SendResultFields {
   description?: string;
 }
 
+const SEND_OUTPUT_PROPERTIES = {
+  sessionID: { type: "string" },
+  messageID: { type: "string" },
+  delivery: { type: "string", enum: Object.values(DELIVERY) },
+  chars: { type: "integer" },
+  resume: {
+    type: "boolean",
+    description: "Whether the message could wake an idle child.",
+  },
+  status: {
+    type: "string",
+    enum: [...RUN_STATUSES],
+    description:
+      "Status observed before the message was accepted; a wake may not be reflected yet.",
+  },
+  active: {
+    type: "boolean",
+    description:
+      "True when the target was running, unknown, or owned a background job when observed.",
+  },
+  backgroundJob: BACKGROUND_JOB_SCHEMA,
+  pending: {
+    type: "boolean",
+    description: "True when the message was accepted without waking an idle child.",
+  },
+} as const;
+
 const SEND_OUTPUT_SCHEMA = {
   type: "object",
+  properties: SEND_OUTPUT_PROPERTIES,
+  required: ["sessionID", "delivery", "chars", "resume", "active"],
+  additionalProperties: false,
+} as const;
+
+const QUEUE_OUTPUT_SCHEMA = {
+  type: "object",
   properties: {
-    sessionID: { type: "string" },
-    messageID: { type: "string" },
-    delivery: { type: "string", enum: Object.values(DELIVERY) },
-    chars: { type: "integer" },
-    resume: {
+    ...SEND_OUTPUT_PROPERTIES,
+    queued: {
       type: "boolean",
-      description: "Whether the message could wake an idle child.",
-    },
-    status: {
-      type: "string",
-      enum: [...RUN_STATUSES],
       description:
-        "Status observed before the message was accepted; a wake may not be reflected yet.",
-    },
-    pending: {
-      type: "boolean",
-      description: "True when the message was accepted without waking an idle child.",
+        "True when the message was accepted but has not started yet. Inferred from observed status and resume; other queued prompts may be ahead.",
     },
   },
-  required: ["sessionID", "delivery", "chars", "resume"],
+  required: ["sessionID", "delivery", "chars", "resume", "active"],
   additionalProperties: false,
 } as const;
 
@@ -81,9 +105,15 @@ const CONTEXT_OUTPUT_SCHEMA = {
       description:
         "Status observed before the message was accepted; context does not wake the child.",
     },
+    active: {
+      type: "boolean",
+      description:
+        "True when the target was running, unknown, or owned a background job when observed.",
+    },
+    backgroundJob: BACKGROUND_JOB_SCHEMA,
     pending: { type: "boolean" },
   },
-  required: ["sessionID", "delivery", "chars"],
+  required: ["sessionID", "delivery", "chars", "active"],
   additionalProperties: false,
 } as const;
 
@@ -144,10 +174,11 @@ const runPromptSend = async (
       resume,
     };
     applySendResult(output, result);
+    const queuedNote = result.queued !== undefined ? `, queued=${result.queued}` : "";
     return outputStrategy.respond(
       `${admittedLabel} ${sessionID}` +
         (result.admitted?.id ? ` as ${result.admitted.id}` : "") +
-        ` (delivery=${delivery}, resume=${resume}, ${chars} chars).`,
+        ` (delivery=${delivery}, resume=${resume}${queuedNote}, ${chars} chars).`,
       output,
       format,
     );
@@ -194,8 +225,9 @@ export const registerSteerTool = (editor: ToolEditor, deps: SendDeps) => {
       "Send an instruction into a session at its next model request. " +
       "Use it to correct course, add a constraint, or forbid a step. " +
       "It does not interrupt current work: the message is delivered before the next request. " +
+      "The plugin cannot move a blocking shell to the background, so delivery may wait for that shell. " +
       "By default an idle child is woken; set resume:false to accept the message without waking it. " +
-      "Use queue instead when the message should wait until the current task settles.",
+      "Use queue instead when the message should wait until the current execution settles.",
     input: sendInputSchema(
       outputStrategy,
       limits.maxTextLength,
@@ -225,16 +257,17 @@ export const registerQueueTool = (editor: ToolEditor, deps: SendDeps) => {
     name: TOOL.queue,
     description:
       "Queue a message for a session as its next independent turn. " +
-      "Unlike steer, it does not join the current run: it waits until the current task settles, then starts a separate turn. " +
+      "Unlike steer, it does not join the current run: it waits for the current execution to settle, then starts a separate turn. " +
+      "Background jobs are not waited for and continue in parallel. " +
       "Use it for 'do this next' work. By default an idle child is woken; set resume:false to accept the message without waking it. " +
       "Use steer instead to correct the current run.",
     input: sendInputSchema(
       outputStrategy,
       limits.maxTextLength,
       "Follow-up message.",
-      "Default true: wake an idle child and start the queued turn. Set false to accept without waking; an idle child keeps the message pending until its next run.",
+      "Default true: wake an idle child and start the queued turn. The queue waits for the current execution, not background jobs. Set false to accept without waking; an idle child keeps the message pending until its next run.",
     ),
-    output: outputStrategy.schema(SEND_OUTPUT_SCHEMA),
+    output: outputStrategy.schema(QUEUE_OUTPUT_SCHEMA),
     options: { namespace: deps.config.namespace },
     execute: async (rawInput, context) =>
       runPromptSend(
@@ -307,6 +340,7 @@ export const registerContextTool = (editor: ToolEditor, deps: SendDeps) => {
             kind: SEND_KIND.synthetic,
             resume: false,
             description,
+            metadata: { source: CONTEXT_METADATA_SOURCE },
           },
           context,
           "Context injection",

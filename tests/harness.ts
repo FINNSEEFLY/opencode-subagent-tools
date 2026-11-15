@@ -8,6 +8,8 @@ export interface HarnessOptions {
   options?: Record<string, any>;
   sessionList?: (input: any, options?: any) => Promise<any>;
   noSessionList?: boolean;
+  noSessionHook?: boolean;
+  hookError?: Error;
   eventError?: Error;
   eventFailures?: number;
 }
@@ -27,6 +29,8 @@ export function makeHarness(input: HarnessOptions = {}) {
   };
   const sessionListCalls: any[] = [];
   const eventSubscribeCalls: any[] = [];
+  const idleHooks: Array<{ name: string; callback: (input: any) => any }> = [];
+  const hookDisposeCalls: string[] = [];
 
   const queue: Event[] = [];
   const waiters: Array<(result: IteratorResult<Event>) => void> = [];
@@ -95,6 +99,15 @@ export function makeHarness(input: HarnessOptions = {}) {
         }
         return { interrupted: true };
       },
+      hook: async (name: string, callback: (input: any) => any) => {
+        if (input.hookError) throw input.hookError;
+        idleHooks.push({ name, callback });
+        return {
+          dispose: async () => {
+            hookDisposeCalls.push(name);
+          },
+        };
+      },
     },
     permission: {
       assert: async (value: any) => {
@@ -156,6 +169,7 @@ export function makeHarness(input: HarnessOptions = {}) {
   };
 
   if (input.noSessionList) delete (ctx.session as any).list;
+  if (input.noSessionHook) delete (ctx.session as any).hook;
 
   const emit = (event: Event) => {
     if (event.type === "session.created") {
@@ -195,6 +209,59 @@ export function makeHarness(input: HarnessOptions = {}) {
     return info;
   };
 
+  const fireIdle = async (sessionID: string, background: any[]) => {
+    for (const hook of idleHooks) {
+      if (hook.name === "experimental.idle") {
+        await hook.callback({ sessionID, background });
+      }
+    }
+  };
+
+  const synthetic = (
+    sessionID: string,
+    text: string,
+    metadata?: Record<string, any>,
+    created = Date.now(),
+  ) => {
+    emit({
+      type: "session.synthetic",
+      data: { sessionID, text, metadata },
+      created,
+    });
+  };
+
+  const shellStarted = (
+    sessionID: string,
+    shellID: string,
+    command = "run",
+    created = Date.now(),
+  ) => {
+    emit({
+      type: "session.shell.started",
+      data: { sessionID, shell: { id: shellID, status: "running", command } },
+      created,
+    });
+  };
+
+  const shellEnded = (
+    sessionID: string,
+    shellID: string,
+    status = "exited",
+    created = Date.now(),
+  ) => {
+    emit({
+      type: "session.shell.ended",
+      data: { sessionID, shell: { id: shellID, status, command: "run" } },
+      created,
+    });
+  };
+
+  const flush = async () => {
+    await tick();
+    await tick();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  };
+
   const setup = async () => (await plugin.setup(ctx)) as () => Promise<void>;
 
   return {
@@ -205,11 +272,18 @@ export function makeHarness(input: HarnessOptions = {}) {
     calls,
     sessionListCalls,
     eventSubscribeCalls,
+    idleHooks,
+    hookDisposeCalls,
     namespaces,
     emit,
     tick,
+    flush,
     setup,
     addSession,
+    fireIdle,
+    synthetic,
+    shellStarted,
+    shellEnded,
   };
 }
 

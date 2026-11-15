@@ -13,9 +13,15 @@ describe("event registry", () => {
     expect(TERMINAL_EVENT_STATUS.get(EVENT.executionSucceeded)).toBe("finished");
     expect(TERMINAL_EVENT_STATUS.get(EVENT.executionFailed)).toBe("failed");
     expect(TERMINAL_EVENT_STATUS.get(EVENT.executionInterrupted)).toBe("stopped");
-    expect(TERMINAL_EVENT_STATUS.get(EVENT.deleted)).toBe("stopped");
     expect(TERMINAL_EVENT_STATUS.get(EVENT.idle)).toBe("unknown");
+    expect(TERMINAL_EVENT_STATUS.has(EVENT.deleted)).toBe(false);
     expect(TERMINAL_EVENT_STATUS.has(EVENT.executionStarted)).toBe(false);
     expect(TERMINAL_EVENT_STATUS.has(EVENT.status)).toBe(false);
+    expect(TERMINAL_EVENT_STATUS.has(EVENT.shellStarted)).toBe(false);
+    expect(TERMINAL_EVENT_STATUS.has(EVENT.shellEnded)).toBe(false);
+  });
+
+  test("does not subscribe to synthetic messages", () => {
+    expect(EVENT_TYPES).not.toContain("session.synthetic");
   });
 });

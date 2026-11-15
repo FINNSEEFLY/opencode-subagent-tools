@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cleanups, createChild, makeHarness } from "./harness";
+import { cleanups, createChild, makeHarness, sessionInfo } from "./harness";
 import { validateSchema } from "./schema";
 
 const calls: Array<[string, Record<string, unknown>]> = [
@@ -15,9 +15,23 @@ const calls: Array<[string, Record<string, unknown>]> = [
 describe("tool output schemas", () => {
   test("representative outputs match the registered schemas", async () => {
     const h = makeHarness();
-    createChild(h, "ses_child", "ses_parent");
+    h.sessions.set(
+      "ses_child",
+      sessionInfo("ses_child", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
     createChild(h, "ses_grand", "ses_child");
     cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
 
     const context = { sessionID: "ses_parent" };
     for (const [name, input] of calls) {
@@ -28,11 +42,46 @@ describe("tool output schemas", () => {
     }
   });
 
+  test("validates an unknown background state", async () => {
+    const h = makeHarness();
+    h.sessions.set(
+      "ses_child",
+      sessionInfo("ses_child", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [{ kind: "future-kind", sessionID: "ses_child" }]);
+
+    const tool = h.tools.get("list");
+    const result = await tool.execute({ format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.rows[0].backgroundJob).toEqual({
+      kinds: [],
+      stateUnknown: true,
+    });
+    expect(validateSchema(result.output, tool.output)).toEqual([]);
+  });
+
   test("validates the direct schema in json-only mode", async () => {
     const h = makeHarness({ options: { allowedOutputFormats: ["json"] } });
-    createChild(h, "ses_child", "ses_parent");
+    h.sessions.set(
+      "ses_child",
+      sessionInfo("ses_child", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
     createChild(h, "ses_grand", "ses_child");
     cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
 
     const context = { sessionID: "ses_parent" };
     for (const [name, input] of calls) {

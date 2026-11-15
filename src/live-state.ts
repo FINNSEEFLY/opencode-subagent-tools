@@ -49,6 +49,10 @@ export const createLiveState = () => {
     rememberLive(id, { activeAt: 0, status, lastTerminalAt: at });
   };
 
+  const forget = (id: string) => {
+    live.delete(id);
+  };
+
   const liveStatusFor = (id: string): RunStatus | undefined => {
     const state = live.get(id);
     if (!state) return undefined;
@@ -70,16 +74,28 @@ export const createLiveState = () => {
     const activeAt = state?.activeAt ?? 0;
     if (activeAt > 0 && (marker === 0 || activeAt > marker)) return RUN_STATUS.running;
 
+    const sessionStatus = runStatusFromSession(info);
     const liveStatus = state?.status;
     const liveAt = state?.lastTerminalAt ?? 0;
     if (liveStatus !== undefined) {
       const terminal =
         TERMINAL_RUN_STATUSES.has(liveStatus) ||
         (liveStatus === RUN_STATUS.unknown && liveAt > 0);
-      if (terminal && (marker === 0 || liveAt >= marker)) return liveStatus;
+      if (terminal && (marker === 0 || liveAt >= marker)) {
+        // An idle-derived `unknown` must not hide a terminal outcome that the
+        // session record already knows. Other live evidence keeps precedence.
+        if (
+          liveStatus === RUN_STATUS.unknown &&
+          sessionStatus !== undefined &&
+          TERMINAL_RUN_STATUSES.has(sessionStatus)
+        ) {
+          return sessionStatus;
+        }
+        return liveStatus;
+      }
     }
 
-    return runStatusFromSession(info) ?? RUN_STATUS.unknown;
+    return sessionStatus ?? RUN_STATUS.unknown;
   };
 
   return {
@@ -87,6 +103,7 @@ export const createLiveState = () => {
     rememberLive,
     rememberStarted,
     rememberTerminal,
+    forget,
     liveStatusFor,
     statusFor,
     lastTransitionAt: (id: string) => lastTransitionAt(live.get(id)),

@@ -1,13 +1,20 @@
 import type { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import type { Access } from "../access";
+import {
+  BACKGROUND_JOB_SCHEMA,
+  backgroundJobLabel,
+  isSessionActive,
+  type BackgroundJobInfo,
+  type BackgroundJobStore,
+} from "../background";
 import type { Config } from "../config";
 import { errorMessage, toolError } from "../errors";
 import { INTERRUPT_OUTCOME, interruptOutcome } from "../interrupt";
 import type { LiveStore } from "../live-state";
 import { guardTarget, type Guard } from "../permissions";
 import type { SessionInfoLike } from "../session";
-import { RUN_STATUSES, RUN_STATUS, runStatusIsIdle, type RunStatus } from "../status";
+import { RUN_STATUS, RUN_STATUSES, runStatusIsIdle, type RunStatus } from "../status";
 import {
   TOKEN_USAGE_SCHEMA,
   normalizeTokens,
@@ -42,11 +49,34 @@ const CANCEL_PREFIX: Readonly<
   [CANCEL_OUTCOME.unknown]: (sessionID) => `Interrupt outcome unknown for ${sessionID}`,
 };
 
+const cancelText = (
+  interrupt: CancelOutcome,
+  sessionID: string,
+  status: RunStatus,
+  backgroundJob: BackgroundJobInfo | undefined,
+): string => {
+  if (!backgroundJob) return CANCEL_PREFIX[interrupt](sessionID, status);
+  if (backgroundJob.stateUnknown) {
+    if (interrupt === CANCEL_OUTCOME.rejected && runStatusIsIdle(status)) {
+      return `${sessionID} was not running; the execution was idle and no interrupt was needed for the execution, but background job state could not be verified`;
+    }
+    return `${CANCEL_PREFIX[interrupt](sessionID, status)}; background job state could not be verified`;
+  }
+  const label = backgroundJobLabel(backgroundJob);
+  if (interrupt === CANCEL_OUTCOME.rejected && runStatusIsIdle(status)) {
+    return `${sessionID} was not running; the execution was idle and no interrupt was needed for the execution, but this tool cannot stop the background job (${label})`;
+  }
+  return `${CANCEL_PREFIX[interrupt](sessionID, status)}; background job (${label}) may continue`;
+};
+
 export interface CancelOutput {
   sessionID: string;
   accepted: boolean;
   interrupt: CancelOutcome;
   status: RunStatus;
+  /** The target's own execution or background work. Descendants are excluded. */
+  active: boolean;
+  backgroundJob?: BackgroundJobInfo;
   reason?: string;
   readBackMayLag: boolean;
   cancellationDoesNotCascade: boolean;
@@ -70,6 +100,12 @@ const CANCEL_OUTPUT_SCHEMA = {
         "accepted: server accepted; rejected: no active execution; unknown: aborted or no definitive answer.",
     },
     status: { type: "string", enum: [...RUN_STATUSES] },
+    active: {
+      type: "boolean",
+      description:
+        "True when the target is running, unknown, or owns a background job after the call.",
+    },
+    backgroundJob: BACKGROUND_JOB_SCHEMA,
     reason: { type: "string" },
     readBackMayLag: { type: "boolean" },
     cancellationDoesNotCascade: {
@@ -85,6 +121,7 @@ const CANCEL_OUTPUT_SCHEMA = {
     "accepted",
     "interrupt",
     "status",
+    "active",
     "readBackMayLag",
     "cancellationDoesNotCascade",
   ],
@@ -96,12 +133,13 @@ export interface CancelDeps {
   access: Access;
   guard: Guard;
   live: LiveStore;
+  background: BackgroundJobStore;
   session: Plugin.Context["session"];
 }
 
 export const registerCancelTool = (
   editor: ToolEditor,
-  { config, access, guard, live, session }: CancelDeps,
+  { config, access, guard, live, background, session }: CancelDeps,
 ) => {
   const { allowedOutputFormats } = config;
   const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.cancel);
@@ -111,7 +149,7 @@ export const registerCancelTool = (
     description:
       "Stop one session by its session ID. " +
       "This is a soft interrupt: it stops only that session, does not cascade, and a long tool call may finish first. " +
-      "Jobs owned by an idle session keep running. " +
+      "Jobs owned by an idle session keep running; the result reports observed background work and says when it may remain. " +
       "OpenCode may wake the parent with a cancellation notice. " +
       "The reason is recorded in the result and is not delivered to the child.",
     input: {
@@ -155,6 +193,24 @@ export const registerCancelTool = (
       if (context?.signal?.aborted) {
         return toolError("Aborted before the interrupt was requested.");
       }
+      const beforeStatus = info
+        ? live.statusFor(info, sessionID)
+        : (live.liveStatusFor(sessionID) ?? RUN_STATUS.unknown);
+      let backgroundJob = background.backgroundJobFor(sessionID);
+      let subtreeActive = false;
+      if (runStatusIsIdle(beforeStatus) && !backgroundJob) {
+        const probe = await background.probe({
+          session,
+          targetID: sessionID,
+          signal: context?.signal,
+        });
+        if (context?.signal?.aborted) {
+          return toolError("Aborted before the interrupt was requested.");
+        }
+        backgroundJob = probe.backgroundJob;
+        subtreeActive = probe.subtreeActive;
+      }
+
       let result: { interrupted?: boolean } | undefined;
       try {
         result = (await session.interrupt(
@@ -177,15 +233,21 @@ export const registerCancelTool = (
       const interrupt = interruptOutcome(result);
       const accepted = interrupt === CANCEL_OUTCOME.accepted;
       const readBackMayLag = accepted && !runStatusIsIdle(status);
-      const prefix = CANCEL_PREFIX[interrupt](sessionID, status);
+      if (backgroundJob) {
+        backgroundJob = { ...backgroundJob, mayRemain: true };
+      }
+      const active = isSessionActive(status, backgroundJob);
+      const prefix = cancelText(interrupt, sessionID, status, backgroundJob);
       const output: CancelOutput = {
         sessionID,
         accepted,
         interrupt,
         status,
+        active,
         readBackMayLag,
         cancellationDoesNotCascade: true,
       };
+      if (backgroundJob) output.backgroundJob = backgroundJob;
       if (reason) output.reason = reason;
       if (typeof after?.cost === "number" && Number.isFinite(after.cost))
         output.costUSD = after.cost;
@@ -195,8 +257,12 @@ export const registerCancelTool = (
         output.tokensUsed = tokensUsed(afterTokens);
       }
       const lagNote = readBackMayLag ? " Read-back may lag; re-run list to confirm." : "";
+      const subtreeNote =
+        subtreeActive && !backgroundJob
+          ? " Its subtree may still be active; cancellation does not cascade."
+          : "";
       return outputStrategy.respond(
-        `${prefix}${reason ? ` (${reason})` : ""}. Reported state now: ${status}.${lagNote}`,
+        `${prefix}${reason ? ` (${reason})` : ""}. Reported state now: ${status}.${lagNote}${subtreeNote}`,
         output,
         format,
       );

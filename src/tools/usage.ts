@@ -1,6 +1,13 @@
 import type { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import type { Access } from "../access";
+import {
+  BACKGROUND_JOB_SCHEMA,
+  backgroundJobLabel,
+  isSessionActive,
+  type BackgroundJobInfo,
+  type BackgroundJobStore,
+} from "../background";
 import type { Config } from "../config";
 import type { Discovery } from "../discovery";
 import { errorMessage, toolError } from "../errors";
@@ -12,12 +19,7 @@ import type {
   SessionInfoLike,
   UsageMessage,
 } from "../session";
-import {
-  RUN_STATUSES,
-  RUN_STATUS,
-  runStatusUsageMayLag,
-  type RunStatus,
-} from "../status";
+import { RUN_STATUS, RUN_STATUSES, type RunStatus } from "../status";
 import {
   CONTEXT_USAGE,
   TOKEN_USAGE_SCHEMA,
@@ -43,7 +45,7 @@ export interface TreeUsage {
   tokensUsed?: number;
   /** Whether discovery walked the whole descendant subtree. */
   discoveryComplete: boolean;
-  /** True when at least one descendant is running or unknown. */
+  /** True when at least one descendant is active or unknown. */
   descendantsMayLag?: boolean;
   warning?: string;
 }
@@ -52,7 +54,12 @@ export interface UsageOutput {
   sessionID: string;
   parentID?: string;
   status: RunStatus;
-  /** Usage is as of the last persisted step; running/unknown sessions may lag. */
+  /** The session's own execution or background work; descendants are excluded. */
+  active: boolean;
+  /** Present only when the descendant tree was requested. */
+  subtreeActive?: boolean;
+  backgroundJob?: BackgroundJobInfo;
+  /** Usage is as of the last persisted step; active or unknown sessions may lag. */
   usageMayLag?: boolean;
   costUSD?: number;
   tokens?: TokenUsage;
@@ -74,11 +81,23 @@ const USAGE_OUTPUT_SCHEMA = {
     status: {
       type: "string",
       enum: [...RUN_STATUSES],
-      description: "Observed status; the calling session is reported as running.",
+      description:
+        "Observed execution status; the calling session is reported as running.",
     },
+    active: {
+      type: "boolean",
+      description:
+        "True when the session itself is running, unknown, or owns a background job.",
+    },
+    subtreeActive: {
+      type: "boolean",
+      description:
+        "Present only with includeDescendants: true. True when the target or any discovered descendant is active.",
+    },
+    backgroundJob: BACKGROUND_JOB_SCHEMA,
     usageMayLag: {
       type: "boolean",
-      description: "True when the session is running or unknown; usage may lag.",
+      description: "True when the session is active or unknown; usage may lag.",
     },
     costUSD: { type: "number" },
     tokens: TOKEN_USAGE_SCHEMA,
@@ -130,7 +149,7 @@ const USAGE_OUTPUT_SCHEMA = {
         descendantsMayLag: {
           type: "boolean",
           description:
-            "True when at least one descendant is running or unknown; tree totals may lag, while top-level usageMayLag covers the target.",
+            "True when at least one descendant is active or unknown; tree totals may lag, while top-level usageMayLag covers the target.",
         },
         warning: { type: "string" },
       },
@@ -139,7 +158,7 @@ const USAGE_OUTPUT_SCHEMA = {
     },
     warning: { type: "string" },
   },
-  required: ["sessionID", "status"],
+  required: ["sessionID", "status", "active"],
   additionalProperties: false,
 } as const;
 
@@ -148,13 +167,14 @@ export interface UsageDeps {
   access: Access;
   discovery: Discovery;
   live: LiveStore;
+  background: BackgroundJobStore;
   session: Plugin.Context["session"];
   model: Plugin.Context["model"];
 }
 
 export const registerUsageTool = (
   editor: ToolEditor,
-  { config, access, discovery, live, session, model }: UsageDeps,
+  { config, access, discovery, live, background, session, model }: UsageDeps,
 ) => {
   const { allowedOutputFormats } = config;
   const outputStrategy = resolveToolOutputStrategy(allowedOutputFormats, TOOL.usage);
@@ -162,10 +182,11 @@ export const registerUsageTool = (
   editor.add({
     name: TOOL.usage,
     description:
-      "Read cost, tokens, current context, and status for a session. " +
+      "Read cost, tokens, current context, status, and activity for a session. " +
       "Returns own cumulative cost and tokens, the current context footprint, the model context limit when available, and optional tree totals. " +
+      "`status` is the execution status; `active` covers the session's own execution or background work. " +
       "Read-only; any session ID is accepted. " +
-      "Values are as of the last persisted step and may lag while the session is running or unknown.",
+      "Values are as of the last persisted step and may lag while the session is active or unknown.",
     input: {
       type: "object",
       properties: {
@@ -215,7 +236,9 @@ export const registerUsageTool = (
         context?.sessionID === sessionID
           ? RUN_STATUS.running
           : live.statusFor(info, sessionID);
-      const usageMayLag = runStatusUsageMayLag(status);
+      const backgroundJob = background.backgroundJobFor(sessionID);
+      const active = isSessionActive(status, backgroundJob);
+      const usageMayLag = active;
       const ownTokens = normalizeTokens(info.tokens);
       const ownCost =
         typeof info.cost === "number" && Number.isFinite(info.cost)
@@ -298,6 +321,7 @@ export const registerUsageTool = (
           : undefined;
 
       let tree: TreeUsage | undefined;
+      let subtreeActive: boolean | undefined;
       if (input.includeDescendants === true) {
         const found = await discovery.discoverRows(sessionID, context?.signal);
         if (context?.signal?.aborted) {
@@ -308,13 +332,16 @@ export const registerUsageTool = (
         let costUSD = ownCost ?? 0;
         let tokens = ownTokens;
         let descendantsMayLag = false;
+        let descendantSubtreeActive = false;
         for (const row of found.rows) {
           sessions++;
           descendants++;
           if (row.cost !== undefined) costUSD += row.cost;
           if (row.tokens) tokens = addTokens(tokens, row.tokens);
-          if (runStatusUsageMayLag(row.status)) descendantsMayLag = true;
+          if (row.active) descendantsMayLag = true;
+          if (row.subtreeActive) descendantSubtreeActive = true;
         }
+        subtreeActive = active || descendantSubtreeActive;
         tree = {
           sessions,
           descendants,
@@ -331,8 +358,10 @@ export const registerUsageTool = (
         }
       }
 
-      const output: UsageOutput = { sessionID, status };
+      const output: UsageOutput = { sessionID, status, active };
       if (info.parentID) output.parentID = info.parentID;
+      if (subtreeActive !== undefined) output.subtreeActive = subtreeActive;
+      if (backgroundJob) output.backgroundJob = backgroundJob;
       if (usageMayLag) output.usageMayLag = true;
       if (ownCost !== undefined) output.costUSD = ownCost;
       if (ownTokens) {
@@ -361,6 +390,10 @@ export const registerUsageTool = (
       const lines: string[] = [`Session ${sessionID}`];
       if (info.parentID) lines.push(`parent=${info.parentID}`);
       lines.push(`status=${status}${usageMayLag ? " (usage may lag)" : ""}`);
+      if (backgroundJob) {
+        lines.push(`background=${backgroundJobLabel(backgroundJob)}`);
+      }
+      if (subtreeActive === true && !active) lines.push("subtree=active");
       if (ownCost !== undefined) lines.push(`cost=${formatCost(ownCost)}`);
       if (ownTokens) {
         lines.push(

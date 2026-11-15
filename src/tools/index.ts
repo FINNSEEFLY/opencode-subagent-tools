@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import type { Access } from "../access";
+import type { BackgroundJobStore } from "../background";
 import type { Config } from "../config";
 import type { Discovery } from "../discovery";
 import type { LiveStore } from "../live-state";
@@ -17,6 +18,7 @@ export interface ToolDeps {
   access: Access;
   discovery: Discovery;
   live: LiveStore;
+  background: BackgroundJobStore;
   guard: Guard;
   sendMessage: SendMessage;
   session: Plugin.Context["session"];

@@ -33,6 +33,7 @@
 
 import { Plugin } from "@opencode/plugin";
 import { createAccess } from "./access";
+import { createBackgroundJobStore, registerIdleHook } from "./background";
 import { resolveConfig } from "./config";
 import { createDiscovery } from "./discovery";
 import { OPENCODE_REQUIREMENT } from "./errors";
@@ -58,16 +59,18 @@ export default Plugin.define({
     if (!sessionList) throw new Error(OPENCODE_REQUIREMENT);
 
     const live = createLiveState();
-    const discovery = createDiscovery({
-      sessionList,
-      live,
-      limits: config.limits,
-    });
     const access = createAccess({
       session: ctx.session,
       limits: config.limits,
       policy: config.sessionControlPolicy,
       namespace: config.namespace,
+    });
+    const background = createBackgroundJobStore();
+    const discovery = createDiscovery({
+      sessionList,
+      live,
+      background,
+      limits: config.limits,
     });
     const guard = createGuard({
       permission: ctx.permission,
@@ -78,6 +81,7 @@ export default Plugin.define({
       access,
       guard,
       live,
+      background,
     });
 
     const toolsRegistration = await ctx.tool.transform((editor) => {
@@ -86,6 +90,7 @@ export default Plugin.define({
         access,
         discovery,
         live,
+        background,
         guard,
         sendMessage,
         session: ctx.session,
@@ -97,18 +102,26 @@ export default Plugin.define({
       ? await registerSkill(ctx.skill)
       : undefined;
 
+    // The idle hook is experimental and optional. Register it only after the
+    // tools and skill succeeded, so a setup failure cannot leave it behind.
+    const idleHook = await registerIdleHook(ctx.session, background);
+
     // Start the event stream only after tool registration succeeded, so a setup
     // failure cannot leave a background subscriber behind.
     const eventsAbort = new AbortController();
     startEventStream({
       event: ctx.event as unknown as EventApi | undefined,
       live,
+      background,
       signal: eventsAbort.signal,
     });
 
     // Stop the event stream when the plugin unloads or its config reloads.
     return async () => {
       eventsAbort.abort();
+      if (idleHook && typeof idleHook.dispose === "function") {
+        await idleHook.dispose().catch(() => undefined);
+      }
       if (skillRegistration) await skillRegistration.dispose().catch(() => undefined);
       await toolsRegistration.dispose().catch(() => undefined);
     };

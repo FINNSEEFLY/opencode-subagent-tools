@@ -1,5 +1,10 @@
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import type { Access } from "../access";
+import {
+  BACKGROUND_JOB_SCHEMA,
+  backgroundJobLabel,
+  type BackgroundJobInfo,
+} from "../background";
 import { limitInteger, type Config } from "../config";
 import { encodeCursor, isAfterCursor, readCursor } from "../cursor";
 import type { Discovery } from "../discovery";
@@ -7,19 +12,14 @@ import { toolError } from "../errors";
 import { age, ageSeconds, compactNumber, formatCost } from "../format";
 import { MAX_PROMPT_PREVIEW_LENGTH } from "../session";
 import type { SessionRow } from "../session-row";
-import {
-  RUN_STATUSES,
-  isRunStatus,
-  runStatusUsageMayLag,
-  type RunStatus,
-} from "../status";
+import { RUN_STATUS, RUN_STATUSES, isRunStatus, type RunStatus } from "../status";
 import { clip, isUnsafeControlCode } from "../text";
 import { TOKEN_USAGE_SCHEMA, tokensUsed, type TokenUsage } from "../tokens";
 import { readOptionalSessionID, readToolInput } from "./input";
 import { TOOL } from "./names";
 import { formatPropertyDescription, resolveToolOutputStrategy } from "./output";
 
-const STATUS_COLUMN_WIDTH = Math.max(...RUN_STATUSES.map((status) => status.length));
+const RUN_STATUS_COLUMN_WIDTH = Math.max(...RUN_STATUSES.map((status) => status.length));
 const DISCOVERY_WARNING = "discovery was incomplete; some subagents may be missing.";
 const DISCOVERY_WARNING_TEXT = `\nWarning: ${DISCOVERY_WARNING}`;
 
@@ -36,9 +36,15 @@ export interface ListRowOutput {
   title?: string;
   titleTruncated?: boolean;
   status: RunStatus;
+  /** The session's own execution or background work; descendants are excluded. */
+  active: boolean;
+  /** The session or any discovered descendant is active. */
+  subtreeActive: boolean;
+  activeDescendants?: boolean;
+  backgroundJob?: BackgroundJobInfo;
   ageSeconds?: number;
   launchedAt: number;
-  /** Usage is as of the last persisted step; running/unknown children may lag. */
+  /** Usage is as of the last persisted step; active or unknown children may lag. */
   usageMayLag?: boolean;
   usage?: ListRowUsage;
 }
@@ -49,6 +55,8 @@ export interface ListOutput {
   discoveryComplete: boolean;
   warning?: string;
   known: number;
+  activeCount: number;
+  subtreeActiveCount: number;
   matching: number;
   window: number;
   remaining: number;
@@ -84,7 +92,18 @@ const LIST_OUTPUT_SCHEMA = {
     warning: { type: "string" },
     known: {
       type: "integer",
-      description: "All discovered sessions before the status filter and cursor.",
+      description:
+        "All discovered sessions before the status and activity filters and cursor.",
+    },
+    activeCount: {
+      type: "integer",
+      description:
+        "All discovered sessions with their own active execution or background job, before filters.",
+    },
+    subtreeActiveCount: {
+      type: "integer",
+      description:
+        "All discovered sessions that are active or have an active descendant, before filters.",
     },
     matching: {
       type: "integer",
@@ -108,7 +127,7 @@ const LIST_OUTPUT_SCHEMA = {
     counts: {
       type: "object",
       description:
-        "Counts for all discovered sessions, before the status filter and cursor.",
+        "Counts for all discovered sessions, before the status and activity filters and cursor.",
       properties: Object.fromEntries(
         RUN_STATUSES.map((status) => [status, { type: "integer" }]),
       ),
@@ -126,15 +145,29 @@ const LIST_OUTPUT_SCHEMA = {
           title: { type: "string" },
           titleTruncated: { type: "boolean" },
           status: { type: "string", enum: [...RUN_STATUSES] },
+          active: {
+            type: "boolean",
+            description:
+              "True when the session itself is running, unknown, or owns a background job.",
+          },
+          subtreeActive: {
+            type: "boolean",
+            description: "True when the session or any discovered descendant is active.",
+          },
+          activeDescendants: {
+            type: "boolean",
+            description: "True only when a discovered descendant is active.",
+          },
+          backgroundJob: BACKGROUND_JOB_SCHEMA,
           ageSeconds: { type: "integer" },
           launchedAt: { type: "number" },
           usageMayLag: {
             type: "boolean",
-            description: "True when the session is running or unknown; usage may lag.",
+            description: "True when the session is active or unknown; usage may lag.",
           },
           usage: LIST_ROW_USAGE_SCHEMA,
         },
-        required: ["id", "status", "launchedAt"],
+        required: ["id", "status", "active", "subtreeActive", "launchedAt"],
         additionalProperties: false,
       },
     },
@@ -144,6 +177,8 @@ const LIST_OUTPUT_SCHEMA = {
     "statuses",
     "discoveryComplete",
     "known",
+    "activeCount",
+    "subtreeActiveCount",
     "matching",
     "window",
     "remaining",
@@ -187,6 +222,29 @@ const requestedStatuses = (
 const statusesLabel = (statuses: Set<RunStatus>): string =>
   statuses.size === RUN_STATUSES.length ? "all" : [...statuses].join(", ");
 
+const readOptionalBoolean = (
+  value: unknown,
+  field: string,
+): { value?: boolean; error?: string } => {
+  if (value === undefined) return {};
+  if (typeof value === "boolean") return { value };
+  return { error: `${field} must be a boolean; omit it to include all rows.` };
+};
+
+const filterDescription = (
+  statuses: Set<RunStatus>,
+  active: boolean | undefined,
+  subtreeActive: boolean | undefined,
+): string => {
+  const parts: string[] = [];
+  if (statuses.size !== RUN_STATUSES.length) {
+    parts.push(`statuses: ${statusesLabel(statuses)}`);
+  }
+  if (active !== undefined) parts.push(`active: ${active}`);
+  if (subtreeActive !== undefined) parts.push(`subtreeActive: ${subtreeActive}`);
+  return parts.length > 0 ? parts.join("; ") : "the current filters";
+};
+
 const escapeText = (value: string): string =>
   Array.from(
     value
@@ -198,11 +256,18 @@ const escapeText = (value: string): string =>
     .join("");
 
 const rowText = (row: SessionRow): string => {
-  const usageMayLag = runStatusUsageMayLag(row.status);
+  const usageMayLag = row.active || row.status === RUN_STATUS.unknown;
   const title = clip(row.title, MAX_PROMPT_PREVIEW_LENGTH);
+  const activity = row.active ? "active" : row.subtreeActive ? "subtree" : "";
+  const background = row.backgroundJob
+    ? `background=${backgroundJobLabel(row.backgroundJob)}`
+    : "";
   return [
     escapeText(row.id),
-    row.status.padEnd(STATUS_COLUMN_WIDTH),
+    row.status.padEnd(RUN_STATUS_COLUMN_WIDTH),
+    activity,
+    background,
+    row.activeDescendants ? "descendants=active" : "",
     `agent=${escapeText(row.agent ?? "?")}`,
     `age=${row.launchedAt > 0 ? age(row.launchedAt) : "?"}`,
     row.cost !== undefined ? `cost=${formatCost(row.cost)}` : "",
@@ -228,14 +293,18 @@ const rowOutput = (row: SessionRow): ListRowOutput => {
   const output: ListRowOutput = {
     id: row.id,
     status: row.status,
+    active: row.active,
+    subtreeActive: row.subtreeActive,
     launchedAt: row.launchedAt,
   };
   if (row.parentID !== undefined) output.parentID = row.parentID;
   if (row.agent !== undefined) output.agent = row.agent;
   if (row.title !== undefined) output.title = row.title;
   if (row.titleTruncated) output.titleTruncated = true;
+  if (row.activeDescendants) output.activeDescendants = true;
+  if (row.backgroundJob) output.backgroundJob = row.backgroundJob;
   if (row.launchedAt > 0) output.ageSeconds = ageSeconds(row.launchedAt);
-  if (runStatusUsageMayLag(row.status)) {
+  if (row.active || row.status === RUN_STATUS.unknown) {
     output.usageMayLag = true;
   }
   if (row.cost !== undefined || row.tokens) {
@@ -301,10 +370,11 @@ export const registerListTool = (
   editor.add({
     name: TOOL.list,
     description:
-      "List subagent sessions from the server's session tree, newest launch first, with observed status. " +
+      "List subagent sessions from the server's session tree, newest launch first, with observed status and activity. " +
       "Defaults to the caller's subtree; pass parentID for any subtree. " +
-      "By default all statuses are included; pass statuses to filter, and use limit/cursor to page through large sets. " +
-      "Rows include status, age, cost, and cumulative token usage when available. " +
+      "`status` describes the last or current execution; use `active` and `subtreeActive` to find work that is still in progress. " +
+      "By default all statuses are included; pass statuses, active, or subtreeActive to filter, and use limit/cursor to page through large sets. " +
+      "Rows include status, activity, background jobs, age, cost, and cumulative token usage when available. " +
       "Discovery is limited, so results can be incomplete; a warning is included when that is possible.",
     input: {
       type: "object",
@@ -320,7 +390,17 @@ export const registerListTool = (
           maxItems: RUN_STATUSES.length,
           items: { type: "string", enum: [...RUN_STATUSES] },
           description:
-            "Statuses to include. Omit to include all statuses; pass one or more to filter. An empty array is rejected.",
+            "Execution statuses to include. `finished` means the last execution succeeded, not that the delegated task is complete. Omit to include all statuses; an empty array is rejected.",
+        },
+        active: {
+          type: "boolean",
+          description:
+            "Filter on the session's own activity: running, unknown, or owning a background job. Omit to include both active and inactive rows.",
+        },
+        subtreeActive: {
+          type: "boolean",
+          description:
+            "Filter on the session or any discovered descendant. Omit to include both active and inactive subtrees.",
         },
         ...outputStrategy.formatProperty(
           formatPropertyDescription(outputStrategy, "the human-readable table"),
@@ -367,6 +447,15 @@ export const registerListTool = (
           `statuses must contain at least one status. Omit statuses to include all, or pass one or more of: ${RUN_STATUSES.join(", ")}.`,
         );
       }
+      const activeField = readOptionalBoolean(input?.active, "active");
+      if (activeField.error) return toolError(activeField.error);
+      const subtreeActiveField = readOptionalBoolean(
+        input?.subtreeActive,
+        "subtreeActive",
+      );
+      if (subtreeActiveField.error) return toolError(subtreeActiveField.error);
+      const activeFilter = activeField.value;
+      const subtreeActiveFilter = subtreeActiveField.value;
       const limit = limitInteger(input?.limit, limits.maxListRows, 1, limits.maxListRows);
 
       if (requested && requested !== caller) {
@@ -385,7 +474,13 @@ export const registerListTool = (
           "Refusing: the calling session is unknown; pass parentID or call from a session.",
         );
       }
-      const filterKey = [...statuses].toSorted().join(",");
+      const filterKey = [
+        [...statuses].toSorted().join(","),
+        activeFilter === undefined ? "" : `active=${activeFilter}`,
+        subtreeActiveFilter === undefined ? "" : `subtreeActive=${subtreeActiveFilter}`,
+      ]
+        .filter(Boolean)
+        .join("|");
       const cursorResult = readCursor(input?.cursor, {
         tool: TOOL.list,
         root,
@@ -404,7 +499,15 @@ export const registerListTool = (
         return toolError("Aborted during discovery.");
       }
       const warning = found.complete ? "" : DISCOVERY_WARNING_TEXT;
-      const allMatches = found.rows.filter((row) => statuses.has(row.status));
+      const allMatches = found.rows.filter(
+        (row) =>
+          statuses.has(row.status) &&
+          (activeFilter === undefined || row.active === activeFilter) &&
+          (subtreeActiveFilter === undefined ||
+            row.subtreeActive === subtreeActiveFilter),
+      );
+      const activeCount = found.rows.filter((row) => row.active).length;
+      const subtreeActiveCount = found.rows.filter((row) => row.subtreeActive).length;
       const afterCursor = cursor
         ? allMatches.filter((row) => isAfterCursor(row, cursor))
         : allMatches;
@@ -422,6 +525,8 @@ export const registerListTool = (
           statuses: [...statuses],
           discoveryComplete: found.complete,
           known: found.rows.length,
+          activeCount,
+          subtreeActiveCount,
           matching,
           window,
           remaining,
@@ -445,10 +550,10 @@ export const registerListTool = (
         );
       }
 
-      const label = statusesLabel(statuses);
       if (allMatches.length === 0) {
+        const filters = filterDescription(statuses, activeFilter, subtreeActiveFilter);
         return respond(
-          `${found.rows.length} known subagent(s) for ${root}, none match statuses: ${label}.` +
+          `${found.rows.length} known subagent(s) for ${root}, none match ${filters}.` +
             warning,
           outputFor([], 0, 0, 0, 0),
         );

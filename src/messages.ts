@@ -1,10 +1,15 @@
 import type { Plugin } from "@opencode/plugin";
 import type { Access } from "./access";
+import {
+  isSessionActive,
+  type BackgroundJobInfo,
+  type BackgroundJobStore,
+} from "./background";
 import { errorMessage } from "./errors";
 import type { LiveStore } from "./live-state";
 import type { Guard } from "./permissions";
 import { guardTarget } from "./permissions";
-import { runStatusIsIdle, type RunStatus } from "./status";
+import { RUN_STATUS, runStatusIsIdle, type RunStatus } from "./status";
 import type { ToolCtx } from "./tools/input";
 
 export const DELIVERY = {
@@ -35,9 +40,17 @@ export const isSendKind = (value: unknown): value is SendKind =>
 
 export const CONTEXT_DELIVERY = "next-step" as const;
 
+/** Metadata source for context notes injected by this plugin. Never `subagent`. */
+export const CONTEXT_METADATA_SOURCE = "subagent-tools" as const;
+
+export type MessageMetadata = Record<string, string | number | boolean | null>;
+
 export interface SendResultFields {
   messageID?: string;
   status?: RunStatus;
+  active?: boolean;
+  backgroundJob?: BackgroundJobInfo;
+  queued?: boolean;
   pending?: boolean;
 }
 
@@ -53,6 +66,7 @@ export type SendRequest =
       kind: typeof SEND_KIND.synthetic;
       delivery?: never;
       description?: string;
+      metadata?: MessageMetadata;
     });
 
 export class SendAdmissionError extends Error {
@@ -71,6 +85,9 @@ export interface AdmittedMessage {
 export interface SendResult {
   admitted?: AdmittedMessage;
   status?: RunStatus;
+  active?: boolean;
+  backgroundJob?: BackgroundJobInfo;
+  queued?: boolean;
   pending: boolean;
 }
 
@@ -94,6 +111,9 @@ export const applySendResult = <T extends SendResultFields>(
 ): T => {
   if (result.admitted?.id) output.messageID = result.admitted.id;
   if (result.status) output.status = result.status;
+  if (result.active !== undefined) output.active = result.active;
+  if (result.backgroundJob) output.backgroundJob = result.backgroundJob;
+  if (result.queued !== undefined) output.queued = result.queued;
   if (result.pending) output.pending = true;
   return output;
 };
@@ -103,6 +123,7 @@ export interface SendDeps {
   access: Access;
   guard: Guard;
   live: LiveStore;
+  background: BackgroundJobStore;
 }
 
 type SendHandler = (
@@ -131,6 +152,7 @@ const createSendHandlers = (
           text: request.text,
           description:
             request.kind === SEND_KIND.synthetic ? request.description : undefined,
+          metadata: request.kind === SEND_KIND.synthetic ? request.metadata : undefined,
           resume: request.resume,
         },
         { signal },
@@ -143,7 +165,13 @@ const createSendHandlers = (
  * Shared admission path for `steer`, `queue`, and `context`.
  * `prompt` admits a user message; `synthetic` admits a context-only note.
  */
-export const createSendMessage = ({ session, access, guard, live }: SendDeps) => {
+export const createSendMessage = ({
+  session,
+  access,
+  guard,
+  live,
+  background,
+}: SendDeps) => {
   const sendHandlers = createSendHandlers(session);
 
   return async (
@@ -165,6 +193,27 @@ export const createSendMessage = ({ session, access, guard, live }: SendDeps) =>
       throw new SendAdmissionError(`Unsupported send kind: ${String(request.kind)}`);
     }
 
+    // Snapshot the observed target before admission: waking a child can change
+    // its status immediately, while the output describes the state that led to
+    // the queued/pending decision.
+    const status = info
+      ? live.statusFor(info, request.sessionID)
+      : live.liveStatusFor(request.sessionID);
+    const backgroundJob = background.backgroundJobFor(request.sessionID);
+    const active = isSessionActive(status, backgroundJob);
+    // `unknown` is not idle: the session may still be running, so a message
+    // without resume cannot be reported as pending.
+    const pending = runStatusIsIdle(status) && !request.resume;
+    // Queue waits for the current execution, not background jobs. It is queued
+    // when the target is not idle, or when an idle target was not woken.
+    const queued =
+      request.kind === SEND_KIND.prompt && request.delivery === DELIVERY.queue
+        ? status === undefined ||
+          status === RUN_STATUS.running ||
+          status === RUN_STATUS.unknown ||
+          !request.resume
+        : undefined;
+
     let admitted: unknown;
     try {
       admitted = await handler(request, context?.signal);
@@ -183,13 +232,14 @@ export const createSendMessage = ({ session, access, guard, live }: SendDeps) =>
       );
     }
 
-    const status = info
-      ? live.statusFor(info, request.sessionID)
-      : live.liveStatusFor(request.sessionID);
-    // `unknown` is not idle: the session may still be running, so a message
-    // without resume cannot be reported as pending.
-    const pending = runStatusIsIdle(status) && !request.resume;
-    return { admitted: admittedFrom(admitted), status, pending };
+    return {
+      admitted: admittedFrom(admitted),
+      status,
+      active,
+      ...(backgroundJob ? { backgroundJob } : {}),
+      ...(queued !== undefined ? { queued } : {}),
+      pending,
+    };
   };
 };
 

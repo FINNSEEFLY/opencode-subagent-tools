@@ -1,3 +1,4 @@
+import type { BackgroundJobStore } from "./background";
 import type { ResolvedLimits } from "./config";
 import { compareRows } from "./cursor";
 import type { LiveStore } from "./live-state";
@@ -8,7 +9,7 @@ import {
   type SessionList,
   type SessionListResult,
 } from "./session";
-import { rowFromInfo, type SessionRow } from "./session-row";
+import { applySubtreeActivity, rowFromInfo, type SessionRow } from "./session-row";
 
 export const MAX_DISCOVERY_PAGE_SIZE = 100;
 
@@ -20,13 +21,19 @@ export interface DiscoveryResult {
 export interface DiscoveryDeps {
   sessionList: SessionList;
   live: LiveStore;
+  background: BackgroundJobStore;
   limits: Pick<
     ResolvedLimits,
     "maxDiscoveryNodes" | "maxDiscoveryDepth" | "maxDiscoveryPages"
   >;
 }
 
-export const createDiscovery = ({ sessionList, live, limits }: DiscoveryDeps) => {
+export const createDiscovery = ({
+  sessionList,
+  live,
+  background,
+  limits,
+}: DiscoveryDeps) => {
   const { maxDiscoveryNodes, maxDiscoveryDepth, maxDiscoveryPages } = limits;
 
   const listChildren = async (
@@ -139,9 +146,10 @@ export const createDiscovery = ({ sessionList, live, limits }: DiscoveryDeps) =>
   ): Promise<{ rows: SessionRow[]; complete: boolean }> => {
     const discovery = await discoverSubtree(root, signal);
     const rows = discovery.items
-      .map((info) => rowFromInfo(live, info))
+      .map((info) => rowFromInfo(live, background, info))
       .filter((row): row is SessionRow => row !== undefined)
       .toSorted(compareRows);
+    applySubtreeActivity(rows);
     return { rows, complete: discovery.complete };
   };
 

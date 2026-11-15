@@ -17,6 +17,9 @@ const makeSend = (
       statusFor: () => "finished",
       liveStatusFor: () => undefined,
     } as never,
+    background: {
+      backgroundJobFor: () => undefined,
+    } as never,
   });
 };
 

@@ -1,3 +1,4 @@
+import type { BackgroundJobStore } from "./background";
 import type { LiveStore } from "./live-state";
 import { normalizeSessionID } from "./session";
 import {
@@ -15,6 +16,8 @@ export const EVENT = {
   executionInterrupted: "session.execution.interrupted",
   deleted: "session.deleted",
   idle: "session.idle",
+  shellStarted: "session.shell.started",
+  shellEnded: "session.shell.ended",
 } as const;
 
 export type EventType = (typeof EVENT)[keyof typeof EVENT];
@@ -25,12 +28,16 @@ const EVENT_KIND = {
   status: "status",
   started: "started",
   terminal: "terminal",
+  background: "background",
+  deleted: "deleted",
 } as const;
 
 type EventMeta =
   | { kind: typeof EVENT_KIND.status }
   | { kind: typeof EVENT_KIND.started }
-  | { kind: typeof EVENT_KIND.terminal; status: RunStatus };
+  | { kind: typeof EVENT_KIND.terminal; status: RunStatus }
+  | { kind: typeof EVENT_KIND.background }
+  | { kind: typeof EVENT_KIND.deleted };
 
 export const EVENT_META: Readonly<Record<EventType, EventMeta>> = {
   [EVENT.status]: { kind: EVENT_KIND.status },
@@ -38,8 +45,10 @@ export const EVENT_META: Readonly<Record<EventType, EventMeta>> = {
   [EVENT.executionSucceeded]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.finished },
   [EVENT.executionFailed]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.failed },
   [EVENT.executionInterrupted]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.stopped },
-  [EVENT.deleted]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.stopped },
+  [EVENT.deleted]: { kind: EVENT_KIND.deleted },
   [EVENT.idle]: { kind: EVENT_KIND.terminal, status: RUN_STATUS.unknown },
+  [EVENT.shellStarted]: { kind: EVENT_KIND.background },
+  [EVENT.shellEnded]: { kind: EVENT_KIND.background },
 };
 
 const EVENT_META_MAP: ReadonlyMap<string, EventMeta> = new Map(
@@ -66,6 +75,7 @@ export interface EventLike {
   data?: {
     sessionID?: unknown;
     status?: { type?: unknown };
+    shell?: { id?: unknown; status?: unknown };
   };
 }
 
@@ -96,7 +106,12 @@ export const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
     if (signal.aborted) onAbort();
   });
 
-export const handleEvent = (live: LiveStore, event: EventLike) => {
+export interface EventDeps {
+  live: LiveStore;
+  background: BackgroundJobStore;
+}
+
+export const handleEvent = async ({ live, background }: EventDeps, event: EventLike) => {
   const type = event?.type;
   const data = event?.data ?? {};
   const id = normalizeSessionID(data.sessionID);
@@ -109,6 +124,26 @@ export const handleEvent = (live: LiveStore, event: EventLike) => {
     event.created > 0
       ? event.created
       : Date.now();
+
+  if (meta.kind === EVENT_KIND.deleted) {
+    live.forget(id);
+    background.recordDeleted(id, eventAt);
+    return;
+  }
+
+  if (meta.kind === EVENT_KIND.background) {
+    if (type === EVENT.shellStarted) {
+      background.recordShellStarted(id, data.shell?.id, eventAt);
+      return;
+    }
+    if (type === EVENT.shellEnded) {
+      if (data.shell?.status === "running") return;
+      background.recordShellEnded(id, data.shell?.id, eventAt);
+      return;
+    }
+    return;
+  }
+
   const previous = live.live.get(id);
 
   if (meta.kind === EVENT_KIND.status) {
@@ -145,6 +180,7 @@ export const handleEvent = (live: LiveStore, event: EventLike) => {
 export interface EventStreamDeps {
   event: EventApi | undefined;
   live: LiveStore;
+  background: BackgroundJobStore;
   signal: AbortSignal;
 }
 
@@ -154,7 +190,12 @@ export interface EventStreamDeps {
  * event stream does not reconnect after a failure, so recreate it here;
  * `onActivity` also covers keepalive frames.
  */
-export const startEventStream = ({ event, live, signal }: EventStreamDeps) => {
+export const startEventStream = ({
+  event,
+  live,
+  background,
+  signal,
+}: EventStreamDeps) => {
   const subscribe = event?.subscribe;
   if (typeof subscribe !== "function") return;
 
@@ -180,7 +221,7 @@ export const startEventStream = ({ event, live, signal }: EventStreamDeps) => {
           if (incoming.type === SERVER_CONNECTED_EVENT) continue;
           healthy = true;
           attempt = 0;
-          handleEvent(live, incoming);
+          await handleEvent({ live, background }, incoming);
         }
       } catch (error) {
         if (signal.aborted) return;

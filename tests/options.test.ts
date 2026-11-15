@@ -69,6 +69,8 @@ describe("options and events", () => {
         "session.execution.started",
         "session.execution.succeeded",
         "session.idle",
+        "session.shell.ended",
+        "session.shell.started",
         "session.status",
       ].toSorted(),
     );

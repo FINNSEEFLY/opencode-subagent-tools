@@ -120,6 +120,28 @@ describe("ownership and mutations", () => {
     ).rejects.toThrow("may or may not have been accepted");
   });
 
+  test("cancel returns a normal result when the abort arrives after the interrupt", async () => {
+    const h = makeHarness();
+    createChild(h, "ses_child", "ses_parent");
+    cleanups.push(await h.setup());
+    const controller = new AbortController();
+    h.ctx.session.interrupt = async ({ sessionID }: { sessionID: string }) => {
+      h.calls.interrupt.push({ sessionID, resume: false });
+      controller.abort();
+      return { interrupted: true };
+    };
+
+    const result = await h.tools
+      .get("cancel")
+      .execute(
+        { sessionID: "ses_child", format: "json" },
+        { sessionID: "ses_parent", signal: controller.signal },
+      );
+    expect(result.output.interrupt).toBe("accepted");
+    expect(result.output.accepted).toBe(true);
+    expect(result.output.status).toBeDefined();
+  });
+
   test("cancel reports an interrupt failure", async () => {
     const h = makeHarness();
     createChild(h, "ses_child", "ses_parent");
@@ -394,6 +416,109 @@ describe("ownership and mutations", () => {
     expect(result.output.delivery).toBe("queue");
     expect(result.output.status).toBe("finished");
     expect(result.output.resume).toBe(true);
+    expect(result.output.queued).toBe(false);
+    expect(result.output.active).toBe(false);
+  });
+
+  test("queue reports queued from observed status and resume", async () => {
+    const h = makeHarness();
+    createChild(h, "ses_run", "ses_parent");
+    h.sessions.set(
+      "ses_done",
+      sessionInfo("ses_done", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
+    cleanups.push(await h.setup());
+
+    let result = await h.tools
+      .get("queue")
+      .execute(
+        { sessionID: "ses_run", text: "next", format: "json" },
+        { sessionID: "ses_parent" },
+      );
+    expect(result.output.queued).toBe(true);
+    expect(result.output.active).toBe(true);
+
+    result = await h.tools
+      .get("queue")
+      .execute(
+        { sessionID: "ses_done", text: "next", resume: false, format: "json" },
+        { sessionID: "ses_parent" },
+      );
+    expect(result.output.queued).toBe(true);
+    expect(result.output.pending).toBe(true);
+  });
+
+  test("send output reflects the target before admission", async () => {
+    const h = makeHarness();
+    h.sessions.set(
+      "ses_child",
+      sessionInfo("ses_child", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
+    cleanups.push(await h.setup());
+    h.ctx.session.prompt = async () => {
+      h.emit({
+        type: "session.execution.started",
+        data: { sessionID: "ses_child" },
+      });
+      await h.flush();
+      return { id: "inbox_user" };
+    };
+
+    const result = await h.tools
+      .get("queue")
+      .execute(
+        { sessionID: "ses_child", text: "next", format: "json" },
+        { sessionID: "ses_parent" },
+      );
+    expect(result.output.status).toBe("finished");
+    expect(result.output.active).toBe(false);
+    expect(result.output.queued).toBe(false);
+  });
+
+  test("queue and context report observed background work", async () => {
+    const h = makeHarness();
+    h.sessions.set(
+      "ses_child",
+      sessionInfo("ses_child", "ses_parent", {
+        outcome: "succeeded",
+        time: { created: 1, updated: 2, idle: 2 },
+      }),
+    );
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
+
+    let result = await h.tools
+      .get("queue")
+      .execute(
+        { sessionID: "ses_child", text: "next", format: "json" },
+        { sessionID: "ses_parent" },
+      );
+    expect(result.output.active).toBe(true);
+    expect(result.output.backgroundJob).toEqual({ kinds: ["shell"] });
+    expect(result.output.queued).toBe(false);
+
+    result = await h.tools
+      .get("context")
+      .execute(
+        { sessionID: "ses_child", text: "note", format: "json" },
+        { sessionID: "ses_parent" },
+      );
+    expect(result.output.active).toBe(true);
+    expect(result.output.backgroundJob).toEqual({ kinds: ["shell"] });
+    expect(result.output.queued).toBeUndefined();
   });
 
   test("non-boolean resume values do not wake an idle child", async () => {
@@ -452,6 +577,7 @@ describe("ownership and mutations", () => {
         sessionID: "ses_child",
         text: "migration applied",
         description: "state",
+        metadata: { source: "subagent-tools" },
         resume: false,
       },
     ]);
@@ -568,5 +694,196 @@ describe("ownership and mutations", () => {
         ),
     ).rejects.toThrow("text is 8 characters; maximum is 5");
     expect(h.calls.prompt).toHaveLength(0);
+  });
+});
+
+describe("cancel with background work", () => {
+  const finished = (id: string, parentID: string) =>
+    sessionInfo(id, parentID, {
+      outcome: "succeeded",
+      time: { created: 1, updated: 2, idle: 2 },
+    });
+
+  test("an idle target with a background shell is reported honestly", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "shell",
+        sessionID: "ses_child",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.interrupt).toBe("rejected");
+    expect(result.output.active).toBe(true);
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["shell"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("cannot stop the background job (shell)");
+    expect(result.content).not.toContain("no interrupt was needed.");
+  });
+
+  test("an idle target with a background image is reported honestly", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "image",
+        sessionID: "ses_child",
+        path: "out.png",
+        model: "model",
+      },
+    ]);
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["image"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("cannot stop the background job (image)");
+  });
+
+  test("a failed probe sets stateUnknown instead of claiming no job", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    h.ctx.session.context = async () => {
+      throw new Error("no context");
+    };
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.active).toBe(true);
+    expect(result.output.backgroundJob).toEqual({
+      kinds: [],
+      stateUnknown: true,
+      mayRemain: true,
+    });
+    expect(result.content).toContain("background job state could not be verified");
+  });
+
+  test("an accepted interrupt says a background job may continue", async () => {
+    const h = makeHarness();
+    createChild(h, "ses_child", "ses_parent");
+    cleanups.push(await h.setup());
+    h.shellStarted("ses_child", "sh_1");
+    await h.flush();
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.interrupt).toBe("accepted");
+    expect(result.output.active).toBe(true);
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["shell"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("background job (shell) may continue");
+  });
+
+  test("an idle target with known descendant jobs notes the subtree", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_mid", finished("ses_mid", "ses_parent"));
+    h.sessions.set("ses_leaf", finished("ses_leaf", "ses_mid"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_mid", [
+      {
+        kind: "shell",
+        sessionID: "ses_leaf",
+        shellID: "sh_1",
+        command: "run",
+      },
+    ]);
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_mid", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.active).toBe(false);
+    expect(result.output.backgroundJob).toBeUndefined();
+    expect(result.content).toContain("subtree may still be active");
+  });
+
+  test("cancel reports a structured subagent job", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_parent", finished("ses_parent", "ses_root"));
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_parent", [
+      {
+        kind: "subagent",
+        sessionID: "ses_parent",
+        childSessionID: "ses_child",
+        agent: "general",
+        description: "task",
+      },
+    ]);
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_parent", format: "json" }, { sessionID: "ses_root" });
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["subagent"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("cannot stop the background job (subagent)");
+  });
+
+  test("cancel probes a running subagent tool part", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", []);
+    h.ctx.session.context = async ({ sessionID }: { sessionID: string }) =>
+      sessionID === "ses_child"
+        ? [
+            {
+              type: "assistant",
+              content: [{ type: "tool", name: "subagent", state: { status: "running" } }],
+            },
+          ]
+        : [];
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["subagent"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("cannot stop the background job (subagent)");
+  });
+
+  test("cancel fails closed without an authoritative snapshot", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.backgroundJob).toEqual({
+      kinds: [],
+      stateUnknown: true,
+      mayRemain: true,
+    });
+    expect(result.content).toContain("background job state could not be verified");
   });
 });

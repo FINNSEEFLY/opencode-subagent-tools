@@ -1,6 +1,11 @@
 import type { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import type { Access } from "../access";
+import {
+  BACKGROUND_JOB_SCHEMA,
+  backgroundJobLabel,
+  type BackgroundJobInfo,
+} from "../background";
 import type { Config } from "../config";
 import { encodeCursor, isAfterCursor, readCursor } from "../cursor";
 import type { Discovery } from "../discovery";
@@ -8,9 +13,10 @@ import { errorMessage, toolError } from "../errors";
 import { INTERRUPT_OUTCOME, interruptOutcome } from "../interrupt";
 import type { LiveStore } from "../live-state";
 import { guardTarget, type Guard } from "../permissions";
+import type { SessionRow } from "../session-row";
 import {
-  RUN_STATUSES,
   RUN_STATUS,
+  RUN_STATUSES,
   TERMINAL_RUN_STATUSES,
   type RunStatus,
 } from "../status";
@@ -35,6 +41,7 @@ export interface CancelDescendantsTarget {
   interrupt: CancelInterrupt;
   readBack: CancelReadBack;
   status?: RunStatus;
+  backgroundJob?: BackgroundJobInfo;
   error?: string;
 }
 
@@ -42,6 +49,10 @@ export interface CancelDescendantsOutput {
   known: number;
   considered: number;
   running: number;
+  activeCount: number;
+  subtreeActiveCount: number;
+  backgroundJobCount: number;
+  backgroundJobMayRemain?: boolean;
   beforeCursorRunning?: number;
   targets: CancelDescendantsTarget[];
   remaining: number;
@@ -49,6 +60,14 @@ export interface CancelDescendantsOutput {
   reason?: string;
   cursor?: string;
   warning?: string;
+}
+
+export interface CancelDescendantsSummary {
+  activeCount: number;
+  subtreeActiveCount: number;
+  backgroundJobCount: number;
+  backgroundJobMayRemain: boolean;
+  idleParentsWithActiveDescendants: number;
 }
 
 const CANCEL_DESCENDANTS_TARGET_SCHEMA = {
@@ -68,6 +87,7 @@ const CANCEL_DESCENDANTS_TARGET_SCHEMA = {
         "ok: status check succeeded and status is set; failed: status check failed; not-read: not attempted or aborted.",
     },
     status: { type: "string", enum: [...RUN_STATUSES] },
+    backgroundJob: BACKGROUND_JOB_SCHEMA,
     error: { type: "string" },
   },
   required: ["sessionID", "interrupt", "readBack"],
@@ -89,6 +109,24 @@ const CANCEL_DESCENDANTS_OUTPUT_SCHEMA = {
     running: {
       type: "integer",
       description: "Running descendants among considered.",
+    },
+    activeCount: {
+      type: "integer",
+      description:
+        "Considered descendants with their own active execution or background job.",
+    },
+    subtreeActiveCount: {
+      type: "integer",
+      description: "Considered descendants that are active or have an active descendant.",
+    },
+    backgroundJobCount: {
+      type: "integer",
+      description:
+        "Considered descendants that are not running but own a background job.",
+    },
+    backgroundJobMayRemain: {
+      type: "boolean",
+      description: "True when an observed background job may still run after this call.",
     },
     beforeCursorRunning: {
       type: "integer",
@@ -113,7 +151,17 @@ const CANCEL_DESCENDANTS_OUTPUT_SCHEMA = {
     cursor: { type: "string" },
     warning: { type: "string" },
   },
-  required: ["known", "considered", "running", "targets", "remaining", "aborted"],
+  required: [
+    "known",
+    "considered",
+    "running",
+    "activeCount",
+    "subtreeActiveCount",
+    "backgroundJobCount",
+    "targets",
+    "remaining",
+    "aborted",
+  ],
   additionalProperties: false,
 } as const;
 
@@ -193,7 +241,12 @@ const INTERRUPT_DETAIL: ReadonlyMap<CancelInterrupt, TargetDetail> = new Map([
 
 const targetDetail = (target: CancelDescendantsTarget): string => {
   const detail = INTERRUPT_DETAIL.get(target.interrupt)?.(target);
+  const background = target.backgroundJob
+    ? `background=${backgroundJobLabel(target.backgroundJob)} cannot be stopped`
+    : undefined;
+  if (detail && background) return `${detail}; ${background}`;
   if (detail) return detail;
+  if (background) return background;
   if (target.status === RUN_STATUS.running) return "still running";
   if (target.status === RUN_STATUS.unknown) return "status unknown";
   return target.status ?? "status unavailable";
@@ -203,12 +256,34 @@ export const summarizeCancelDescendants = (
   targets: readonly CancelDescendantsTarget[],
   remaining: number,
   cursor?: string,
+  summary?: CancelDescendantsSummary,
 ): string => {
   if (targets.length === 0) {
-    if (remaining === 0) return "No running subagents needed an interrupt.";
-    return `No interrupts were attempted; ${remaining} running subagent(s) left${
-      cursor ? `; use cursor ${cursor} to continue` : "; retry with the same cursor"
-    }.`;
+    if (remaining > 0) {
+      return `No interrupts were attempted; ${remaining} running subagent(s) left${
+        cursor ? `; use cursor ${cursor} to continue` : "; retry with the same cursor"
+      }.`;
+    }
+    const parts: string[] = [];
+    if (summary?.backgroundJobCount) {
+      parts.push(
+        `${summary.backgroundJobCount} idle subagent(s) own background jobs that this tool cannot stop`,
+      );
+    }
+    if (summary?.idleParentsWithActiveDescendants) {
+      parts.push(
+        `${summary.idleParentsWithActiveDescendants} idle parent(s) have active descendants and may wake`,
+      );
+    }
+    if (parts.length === 0 && summary?.subtreeActiveCount) {
+      parts.push(
+        `${summary.subtreeActiveCount} considered subagent(s) have active work in their subtree`,
+      );
+    }
+    if (parts.length === 0) return "No running subagents needed an interrupt.";
+    let text = `No running executions were interrupted: ${parts.join("; ")}.`;
+    if (summary?.backgroundJobMayRemain) text += " Background work may remain.";
+    return text;
   }
 
   const interruptCounts = countInterrupts(targets);
@@ -259,6 +334,16 @@ export const summarizeCancelDescendants = (
     }
   }
   if (statusUnknown > 0) parts.push(`${statusUnknown} status unknown`);
+  if (summary?.backgroundJobCount) {
+    parts.push(
+      `${summary.backgroundJobCount} idle subagent(s) own background jobs that cannot be stopped`,
+    );
+  }
+  if (summary?.idleParentsWithActiveDescendants) {
+    parts.push(
+      `${summary.idleParentsWithActiveDescendants} idle parent(s) have active descendants and may wake`,
+    );
+  }
 
   let text = `${parts[0]}${parts.length > 1 ? `: ${parts.slice(1).join(", ")}` : ""}.`;
   if (remaining > 0) {
@@ -266,13 +351,30 @@ export const summarizeCancelDescendants = (
       cursor ? `; use cursor ${cursor} to continue` : "; retry with the same cursor"
     }.`;
   }
+  if (summary?.backgroundJobMayRemain) {
+    text += " Background jobs may remain; this tool cannot stop them.";
+  }
 
   const details = targets
-    .filter((target) => !isTerminalTarget(target))
+    .filter((target) => !isTerminalTarget(target) || target.backgroundJob !== undefined)
     .map((target) => `${target.sessionID} (${targetDetail(target)})`);
   if (details.length > 0) text += `\n${details.join("\n")}`;
   return text;
 };
+
+const countActivity = (rows: readonly SessionRow[]) => ({
+  activeCount: rows.filter((row) => row.active).length,
+  subtreeActiveCount: rows.filter((row) => row.subtreeActive).length,
+  backgroundJobCount: rows.filter(
+    (row) => row.status !== RUN_STATUS.running && row.backgroundJob !== undefined,
+  ).length,
+  idleParentsWithActiveDescendants: rows.filter(
+    (row) => row.status !== RUN_STATUS.running && row.activeDescendants === true,
+  ).length,
+});
+
+const backgroundFor = (row: SessionRow): { backgroundJob?: BackgroundJobInfo } =>
+  row.backgroundJob ? { backgroundJob: { ...row.backgroundJob, mayRemain: true } } : {};
 
 export interface CancelDescendantsDeps {
   config: Config;
@@ -300,6 +402,7 @@ export const registerCancelDescendantsTool = (
       `up to ${limits.maxCancelBatch} at a time. ` +
       "There is no sessionID argument; it always stays in the caller's subtree. " +
       "The batch is checked in one permission request and reports each target in targets. " +
+      "Only running executions are targets; idle sessions that own background jobs cannot be stopped by this tool and are reported in backgroundJobCount. " +
       "Use cursor while remaining is above 0. Cursor retries skip failed, unknown, rejected, and not-read targets. " +
       "Nested cancellation can wake an intermediate parent; re-run list and cancel it again if it resumed. " +
       "Discovery can miss running descendants. Use cancel for one target; this is a destructive batch and a soft interrupt, not a hard abort.",
@@ -372,10 +475,15 @@ export const registerCancelDescendantsTool = (
           ? `\nNote: ${beforeCursorRunning} running subagent(s) are before this cursor window; re-run without a cursor to include them.`
           : "";
 
+      const activity = countActivity(afterCursor);
       const emptyOutput = (aborted = false): CancelDescendantsOutput => ({
         known: known.length,
         considered: afterCursor.length,
         running: running.length,
+        activeCount: activity.activeCount,
+        subtreeActiveCount: activity.subtreeActiveCount,
+        backgroundJobCount: activity.backgroundJobCount,
+        ...(activity.backgroundJobCount > 0 ? { backgroundJobMayRemain: true } : {}),
         ...(beforeCursorRunning > 0 ? { beforeCursorRunning } : {}),
         targets: [],
         remaining: running.length,
@@ -413,10 +521,14 @@ export const registerCancelDescendantsTool = (
       }
 
       if (running.length === 0) {
-        return finish(
-          `No running subagents among ${afterCursor.length} known${cursor ? " after the cursor" : ""}.${reasonText}`,
-          emptyOutput(),
-        );
+        const inactive = activity.subtreeActiveCount === 0;
+        const text = inactive
+          ? `No running subagents among ${afterCursor.length} known${cursor ? " after the cursor" : ""}.`
+          : summarizeCancelDescendants([], 0, undefined, {
+              ...activity,
+              backgroundJobMayRemain: activity.backgroundJobCount > 0,
+            });
+        return finish(text + reasonText, emptyOutput());
       }
 
       const targets = running.slice(0, limits.maxCancelBatch);
@@ -452,6 +564,7 @@ export const registerCancelDescendantsTool = (
               sessionID: target.id,
               interrupt: CANCEL_INTERRUPT.unknown,
               readBack: CANCEL_READ_BACK.notRead,
+              ...backgroundFor(target),
               error: "aborted during interrupt; outcome unknown",
             });
             aborted = true;
@@ -461,6 +574,7 @@ export const registerCancelDescendantsTool = (
             sessionID: target.id,
             interrupt: CANCEL_INTERRUPT.failed,
             readBack: CANCEL_READ_BACK.notRead,
+            ...backgroundFor(target),
             error: errorMessage(error),
           });
           continue;
@@ -471,6 +585,7 @@ export const registerCancelDescendantsTool = (
             sessionID: target.id,
             interrupt,
             readBack: CANCEL_READ_BACK.notRead,
+            ...backgroundFor(target),
             error: "aborted before read-back; outcome unknown",
           });
           aborted = true;
@@ -483,6 +598,7 @@ export const registerCancelDescendantsTool = (
               sessionID: target.id,
               interrupt,
               readBack: CANCEL_READ_BACK.notRead,
+              ...backgroundFor(target),
               error: "aborted during read-back; outcome unknown",
             });
             aborted = true;
@@ -492,6 +608,7 @@ export const registerCancelDescendantsTool = (
             sessionID: target.id,
             interrupt,
             readBack: CANCEL_READ_BACK.failed,
+            ...backgroundFor(target),
             error: "read-back failed",
           });
           continue;
@@ -501,6 +618,7 @@ export const registerCancelDescendantsTool = (
           interrupt,
           readBack: CANCEL_READ_BACK.ok,
           status: live.statusFor(after, target.id),
+          ...backgroundFor(target),
         });
       }
 
@@ -512,10 +630,17 @@ export const registerCancelDescendantsTool = (
               root: caller,
             })
           : undefined;
+      const backgroundJobMayRemain =
+        activity.backgroundJobCount > 0 ||
+        results.some((target) => target.backgroundJob?.mayRemain === true);
       const output: CancelDescendantsOutput = {
         known: known.length,
         considered: afterCursor.length,
         running: running.length,
+        activeCount: activity.activeCount,
+        subtreeActiveCount: activity.subtreeActiveCount,
+        backgroundJobCount: activity.backgroundJobCount,
+        ...(backgroundJobMayRemain ? { backgroundJobMayRemain: true } : {}),
         ...(beforeCursorRunning > 0 ? { beforeCursorRunning } : {}),
         targets: results,
         remaining,
@@ -524,7 +649,10 @@ export const registerCancelDescendantsTool = (
       if (reason) output.reason = reason;
       if (nextCursor) output.cursor = nextCursor;
 
-      const summary = summarizeCancelDescendants(results, remaining, nextCursor);
+      const summary = summarizeCancelDescendants(results, remaining, nextCursor, {
+        ...activity,
+        backgroundJobMayRemain,
+      });
       const abortText = aborted ? " Aborted before the batch completed." : "";
       return finish(summary + reasonText + abortText, output);
     },
