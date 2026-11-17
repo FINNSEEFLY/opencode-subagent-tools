@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 - 2026-11-17
+
+### Added
+
+- Background subagent activity tracking: the experimental idle hook, shell events, structured context probes, and a bounded background-job store. The hook is disposed on cleanup; `session.deleted` clears live and background state.
+- `list`: `active`, `subtreeActive`, `activeDescendants`, `backgroundJob`, `activeCount`, `subtreeActiveCount`, and the `active`/`subtreeActive` filters. `status` remains execution-oriented; use `active` and `subtreeActive` for work that is still in progress.
+- `usage`: `active`, optional `subtreeActive` with `includeDescendants`, `backgroundJob`, and background-aware lag flags.
+- `cancel`: `active`, `backgroundJob`, an on-demand probe for idle/terminal targets, and `mayRemain`/`stateUnknown`.
+- `cancel_descendants`: `activeCount`, `subtreeActiveCount`, `backgroundJobCount`, `backgroundJobMayRemain`, and per-target background jobs.
+- `queue`: `queued`; `steer`, `queue`, and `context`: `active` and `backgroundJob`. `queue` waits for the current execution, not background jobs, which continue in parallel.
+
+### Changed
+
+- Requires OpenCode 2.3.0+.
+- `usageMayLag` covers active sessions with background work, not only running/unknown executions.
+
+### Fixed
+
+- An idle event no longer overrides a known terminal status.
+- `cancel` no longer prints only "no interrupt was needed" when an idle target owns background work.
+- `cancel_descendants` reports idle background jobs instead of returning an unqualified "No running subagents".
+
 ## 0.1.0 - 2026-11-07
 
 ### Added

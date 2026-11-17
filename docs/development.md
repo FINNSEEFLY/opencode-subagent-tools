@@ -24,10 +24,11 @@ import { fileURLToPath } from "node:url";
 | Module           | Owns                                                                    |
 | ---------------- | ----------------------------------------------------------------------- |
 | `config.ts`      | Public `Options`/`Limits`, defaults, and clamping                       |
-| `status.ts`      | Status vocabulary and session-record status derivation                  |
+| `status.ts`      | Run-status vocabulary and session-record status derivation              |
 | `session.ts`     | Session-shaped types and `session.list` response adapters               |
 | `live-state.ts`  | Process-local live evidence and freshness rules                         |
-| `session-row.ts` | `SessionRow` projection used by discovery and tools                     |
+| `background.ts`  | Background job store, idle hook, shell events, probe helper             |
+| `session-row.ts` | `SessionRow` projection and recursive subtree activity                  |
 | `discovery.ts`   | Bounded subtree walk and row discovery                                  |
 | `access.ts`      | `session.get` read-back and parent-chain ownership verification         |
 | `permissions.ts` | `subagent.control` permission gate                                      |
@@ -46,9 +47,9 @@ import { fileURLToPath } from "node:url";
 
 ## Tests
 
-The suite lives in `tests/` and mirrors the feature areas: `list`, `usage`, `actions`, `status`, `mutations`, `permissions`, `policy`, `cancel-descendants`, `discovery`, and `options`, plus focused unit tests for config, cursor, events, messages, output, schema validation, and tokens. `tests/harness.ts` builds the mocked plugin context and registers the per-test cleanup hook. Tests exercise the plugin through its public `setup`/tool surface.
+The suite lives in `tests/` and mirrors the feature areas: `list`, `usage`, `activity`, `background`, `actions`, `status`, `mutations`, `permissions`, `policy`, `cancel-descendants`, `discovery`, and `options`, plus focused unit tests for config, cursor, events, messages, output, schema validation, and tokens. `tests/harness.ts` builds the mocked plugin context, the idle-hook and synthetic-message helpers, and the per-test cleanup hook. Tests exercise the plugin through its public `setup`/tool surface.
 
-CI runs the unit suite only. Loading the packed package into a real OpenCode server is a manual release check, not a CI job.
+CI runs the unit suite against `@opencode/plugin` 2.3.0. Loading the packed package into a real OpenCode server is a manual release check, not a CI job.
 
 `tests/`, `.oxlintrc.json`, and `bun.lock` are repository-only; the npm package ships the source tree, `SKILL.md`, `SECURITY.md`, and the user-facing docs.
 
@@ -67,12 +68,15 @@ bun test
 The tests cover:
 
 - Discovery through `ctx.session.list`: pagination, depth/node/page limits, bare arrays, malformed responses, failures, and incomplete-discovery warnings.
-- Status filtering and cursor pagination for `list`: `known`/`matching`/`window`/`remaining`, empty-status rejection, new children between pages, and cursor scoping.
-- `cancel_descendants`: `targets`, `remaining`, cursor, before-cursor running children, abort, and failed/unknown/read-back outcomes.
+- Status filtering, activity filtering, and cursor pagination for `list`: `known`/`activeCount`/`subtreeActiveCount`/`matching`/`window`/`remaining`, empty-status rejection, new children between pages, and cursor scoping.
+- Background job tracking: idle-hook snapshots, shell events, structured probes, descendant owner attribution, stale-event rejection, deletion tombstones, and the cancel probe.
+- Activity projection: own `active`, recursive `subtreeActive`, `activeDescendants`, missing parents, cycles, and order-independent row projection.
+- `cancel_descendants`: `targets`, `remaining`, activity/background counts, cursor, before-cursor running children, abort, and failed/unknown/read-back outcomes.
 - Configurable limits, `sessionControlPolicy` modes, and ancestor verification, including depth exhaustion reported as unverified.
-- Cancellation, steering, queueing, and context injection.
+- Cancellation, steering, queueing, and context injection, including background honesty and queue `queued` state.
 - Usage freshness markers (`usageMayLag` and tree), context unavailable/zero handling, and `Tool.Error` refusals.
 - Live status and freshness (`activeAt`), stale live terminal reconciliation, out-of-order event rejection, event-stream reconnect, and event subscription filtering.
 - Permission routing and denial identity, cleanup, and the `ctx.session.list` capability guard.
+- Cooperative-stop abort behavior across discovery, context reads, interrupts, and batches.
 
 Discovery, ownership checks, interrupts, prompt/synthetic admission, and read-backs accept the tool's `context.signal`; stopping a tool call stops the underlying work where the client supports it.

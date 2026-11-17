@@ -1,6 +1,6 @@
 ---
 name: subagent-tools
-description: Use the subagent tools to list, inspect usage, cancel, steer, queue, and inject context into OpenCode subagent sessions. Covers tool contracts, delivery modes, soft interrupts, status-check lag, parent wake, nested depth, permissions, and budget handoffs.
+description: Use the subagent tools to list, inspect usage, cancel, steer, queue, and inject context into OpenCode subagent sessions. Covers tool contracts, background work, delivery modes, soft interrupts, status-check lag, parent wake, nested depth, permissions, and budget handoffs.
 ---
 
 # Subagent Tools
@@ -9,7 +9,7 @@ Use these tools when you need to inspect or control OpenCode subagent sessions. 
 
 ## Names and namespace
 
-Tool names below omit the default `subagent_` prefix. With the default namespace, call `subagent_list`, `subagent_usage`, `subagent_cancel`, `subagent_cancel_descendants`, `subagent_steer`, `subagent_queue`, and `subagent_context`. The prefix follows the plugin's `namespace` option and may be different in the user's config.
+Tool names below omit the default `subagent_` prefix. With the default namespace, call `subagent_list`, `subagent_usage`, `subagent_cancel`, `subagent_cancel_descendants`, `subagent_steer`, `subagent_queue`, and `subagent_context`. The prefix follows the plugin's `namespace` option and may be different in the user's config. In Code Mode, call the same tools as `tools.subagent.list`, `tools.subagent.usage`, and so on; the namespace separator is `.` instead of `_`.
 
 ## Choose the tool
 
@@ -30,6 +30,23 @@ Tool names below omit the default `subagent_` prefix. With the default namespace
 - `contextTokens` — current context footprint: the last assistant step after the last completed compaction, `input + output + reasoning + cache.read + cache.write`. Only `usage` returns it.
 - `costUSD` — the session's own cost. For a family total, use `usage` with `includeDescendants: true` and read `tree.costUSD`.
 
+## Status and activity
+
+- `status` — the last or current execution: `running`, `finished`, `failed`,
+  `stopped`, or `unknown`. `finished` does not mean the delegated task is done.
+- `active` — the session itself is running, unknown, or owns a background job.
+  Descendants are not included.
+- `subtreeActive` — the session or any discovered descendant is active.
+- `activeDescendants` — at least one discovered child is active in its subtree.
+  An idle parent with active descendants may wake.
+- `backgroundJob` — the session's own observed background work. `kinds` can
+  contain `shell`, `image`, and `subagent`. `stateUnknown` means work may remain
+  but could not be verified.
+- `usageMayLag` — usage may still grow because the session is active or unknown.
+
+Use `active: true` for one session's own work and `subtreeActive: true` for the
+whole delegated task. Do not use `statuses: ["running"]` for "still working".
+
 ## Text vs JSON
 
 When both formats are allowed (the default), every tool accepts `format`. If the user configured only one format, the `format` input is absent: `["text"]` returns text only, and `["json"]` always returns structured output.
@@ -44,7 +61,9 @@ List child sessions discovered through the server's session tree, newest launch 
 ### Inputs
 
 - `parentID?` — parent session ID. Defaults to the calling session. Any parent is accepted because reads are unrestricted.
-- `statuses?` — array of `running`, `stopped`, `failed`, `finished`, or `unknown`. Omit it to include all five. An empty array is an error; unknown values are rejected.
+- `statuses?` — execution statuses: `running`, `stopped`, `failed`, `finished`, or `unknown`. Omit it to include all five. An empty array is an error; unknown values are rejected.
+- `active?` — filter on the session's own activity. Omit to include both.
+- `subtreeActive?` — filter on the session or any discovered descendant. Omit to include both.
 - `limit?` — maximum rows. Defaults to `maxListRows` (20); values outside 1 to `maxListRows` are rejected.
 - `cursor?` — cursor from a previous `list` call. Pass it back unchanged.
 - `format?` — default `json`.
@@ -54,18 +73,20 @@ List child sessions discovered through the server's session tree, newest launch 
 Text is a table-like summary. With `format: "json"`, the output contains:
 
 - `root`, `statuses`, `discoveryComplete`, `warning?`
-- `known` — all discovered sessions before the status filter and cursor.
+- `known` — all discovered sessions before the status and activity filters and cursor.
+- `activeCount`, `subtreeActiveCount` — all discovered sessions with own activity or subtree activity, before filters.
 - `matching` — all matches in the current discovery pass, before the cursor.
 - `window` — matches after the cursor; `remaining` is the part not returned; `remainingPages` is pages left.
-- `counts` — counts for all five statuses across all discovered sessions, before filter and cursor.
-- `rows[]` — `id`, `parentID?`, `agent?`, `title?`, `titleTruncated?`, `status`, `ageSeconds?`, `launchedAt`, `usageMayLag?`, and optional `usage` with `costUSD?`, `tokens?`, and `tokensUsed?`.
+- `counts` — counts for all five execution statuses across all discovered sessions, before filter and cursor. It still sums to `known`.
+- `rows[]` — `id`, `parentID?`, `agent?`, `title?`, `titleTruncated?`, `status`, `active`, `subtreeActive`, `activeDescendants?`, `backgroundJob?`, `ageSeconds?`, `launchedAt`, `usageMayLag?`, and optional `usage` with `costUSD?`, `tokens?`, and `tokensUsed?`.
 
 ### Notes
 
-- A cursor walk sees the sessions found when it started. New children can increase `known`/`matching` without appearing in `window`; re-run without a cursor to include them.
-- Discovery can miss sessions. `discoveryComplete: false` and `warning` mean the result may be incomplete; an empty list is not proof that no subagents exist.
-- `usageMayLag: true` means the row is running or unknown and its usage is as of the last persisted step.
+- A cursor is bound to the status and activity filters. A cursor walk sees the sessions found when it started. New children can increase `known`/`matching` without appearing in `window`; re-run without a cursor to include them.
+- Discovery can miss sessions. `discoveryComplete: false` and `warning` mean the result may be incomplete; an empty list is not proof that no subagents exist. Incomplete discovery can make `subtreeActive` false.
+- `usageMayLag: true` means the row is active or unknown and its usage is as of the last persisted step. A `finished` row with a background job still sets it.
 - `usage.tokens` and `usage.tokensUsed` are cumulative; neither is the current context. `list` does not return `contextTokens`; use `usage` for that.
+- Text markers distinguish own activity (`active`), subtree-only activity (`subtree`), background kind (`background=shell`), and active descendants (`descendants=active`).
 - Use `cursor` until `remaining` is 0.
 
 ## usage
@@ -82,13 +103,15 @@ Read cost, tokens, and current context for a session. Read-only: any session ID 
 
 With `format: "json"`:
 
-- `sessionID`, `parentID?`, `status`, `usageMayLag?`
+- `sessionID`, `parentID?`, `status`, `active`, `usageMayLag?`
+- `subtreeActive?` — present only with `includeDescendants: true`; true when the target or any discovered descendant is active.
+- `backgroundJob?` — the target's own observed background work.
 - `costUSD?` — own cost, not a family total.
 - `tokens?`, `tokensUsed?` — cumulative counts; `tokensUsed` is `input + output + reasoning`.
 - `contextTokens?` — last assistant step after the last completed compaction: `input + output + reasoning + cache.read + cache.write`.
 - `lastRequest?` — input/output/reasoning/cache read/cache write/total for that step.
 - `contextLimit?`, `contextPercent?`, `model?`, `warning?`.
-- `tree?` — with `includeDescendants: true`: `sessions` includes the target, `descendants` excludes it, and `costUSD`/`tokensUsed` include the target's own values when available. `tokensUsed` is omitted when no session in the tree reports token data. `discoveryComplete` covers the descendant walk; `descendantsMayLag?` flags running/unknown descendants; `warning?` marks incomplete discovery.
+- `tree?` — with `includeDescendants: true`: `sessions` includes the target, `descendants` excludes it, and `costUSD`/`tokensUsed` include the target's own values when available. `tokensUsed` is omitted when no session in the tree reports token data. `discoveryComplete` covers the descendant walk; `descendantsMayLag?` flags active/unknown descendants; `warning?` marks incomplete discovery.
 
 ### Notes
 
@@ -96,6 +119,7 @@ With `format: "json"`:
 - `contextTokens` is the current context; `tokens` and `tokensUsed` are cumulative.
 - `costUSD` is the session's own cost. For a family total, use `includeDescendants: true` and read `tree.costUSD`.
 - The caller's own status is reported as `running` while the tool executes.
+- `subtreeActive` is omitted without the tree: descendant activity is unknown, not false.
 - Re-query after the step completes or after cancellation when `usageMayLag` is true.
 
 ## cancel
@@ -112,7 +136,8 @@ Stop one session with a soft interrupt.
 
 With `format: "json"`:
 
-- `sessionID`, `accepted`, `interrupt`, `status`
+- `sessionID`, `accepted`, `interrupt`, `status`, `active`
+- `backgroundJob?` — observed own work, with `mayRemain` and `stateUnknown` when relevant.
 - `reason?`, `readBackMayLag`, `cancellationDoesNotCascade`
 - `costUSD?`, `tokens?`, `tokensUsed?`
 
@@ -127,6 +152,9 @@ With `format: "json"`:
 ### Notes
 
 - This is a soft interrupt: it does not cascade to the child's children, a long tool call may finish first, and jobs owned by an idle session keep running.
+- If the target is idle or terminal and no live background job is known, the tool probes the target's structured context for running work. A failed probe, or a probe without an authoritative idle snapshot for the target, sets `backgroundJob.stateUnknown`; it does not claim there is no job.
+- If `interrupt` is `rejected` and a background job exists, the execution was idle; the tool cannot stop that job. If `interrupt` is accepted and a background job exists, the job may continue. `backgroundJob.mayRemain` marks this.
+- `active` is the target's own state after the call. It is true for running, unknown, or observed background work.
 - OpenCode may wake the parent with a cancellation notice.
 - The status check after cancellation can lag. If `status` is `running` or `unknown`, or `readBackMayLag` is true, re-run `list`.
 - The target may settle as `stopped`, `failed`, or `finished`; `stopped` is not guaranteed.
@@ -148,14 +176,19 @@ There is no `sessionID`, `parentID`, `statuses`, or `limit` argument. The tool a
 With `format: "json"`:
 
 - `known` — all discovered descendants in the current pass, before the cursor is applied; `considered` — after the cursor; `running` — running among `considered`.
+- `activeCount`, `subtreeActiveCount` — considered rows with own or subtree activity.
+- `backgroundJobCount` — considered rows with `status !== "running"` that own a background job.
+- `backgroundJobMayRemain?` — true when observed background work may still run.
 - `beforeCursorRunning?` — running descendants before the cursor window.
-- `targets[]` — `sessionID`, `interrupt` (`accepted`/`rejected`/`failed`/`unknown`), `readBack` (`ok`/`failed`/`not-read`), optional `status`, optional `error`.
+- `targets[]` — `sessionID`, `interrupt` (`accepted`/`rejected`/`failed`/`unknown`), `readBack` (`ok`/`failed`/`not-read`), optional `status`, optional `backgroundJob`, optional `error`.
 - `remaining` — running targets not attempted; `aborted` — the call stopped before the batch completed.
 - `reason?`, `cursor?`, `warning?`.
 
 ### Notes
 
 - Only `running` rows are targeted. `unknown` rows need an individual `cancel`.
+- Idle rows that own background jobs are reported in `backgroundJobCount`; this tool cannot stop those jobs. If no execution is running but background jobs exist, the result is normal, not an unqualified "no running subagents".
+- Idle parents with active descendants are counted in `subtreeActiveCount` and reported in the summary; they may wake. The running descendant is the target, not the parent.
 - The whole batch is checked in one permission request.
 - `maxCancelBatch` limits targets per call. Use `cursor` to continue; `remaining` counts what is left.
 - Failed, unknown, rejected, and not-read targets are reported in `targets` and are not retried by the cursor. Inspect them manually.
@@ -183,17 +216,19 @@ With `format: "json"`:
 
 - `sessionID`, `messageID?`, `delivery`, `chars`, `resume`
 - `status?` — status observed before the message was accepted
+- `active`, `backgroundJob?` — observed target activity and own background work
 - `pending?` — true when the message was accepted without waking an idle child
 
 ### Notes
 
 - Delivered before the child's next model request. It does not interrupt the current tool call.
-- Waking an idle child may not produce a completion notice in the parent. Resume that child by `sessionID` with the built-in `subagent` tool to read its result.
+- The plugin cannot move a blocking shell to the background, so delivery may wait for that shell. This is a UI parity gap, not a hard failure.
+- OpenCode sends a `<subagent>` report each time the child goes idle. A report can say `state="running"` and `Background work still running` when the execution is idle but background work remains. Read the report; do not resume the child just to read its result.
 - `delivery` is the server-reported delivery, normally `steer`.
 
 ## queue
 
-Queue a message as the next independent turn after the current task settles.
+Queue a message as the next independent turn after the current execution settles.
 
 ### Inputs
 
@@ -208,11 +243,15 @@ With `format: "json"`:
 
 - `sessionID`, `messageID?`, `delivery`, `chars`, `resume`
 - `status?` — status observed before the message was accepted
+- `active`, `backgroundJob?` — observed target activity and own background work
+- `queued?` — true when the message was accepted but has not started yet
 - `pending?` — true when the message was accepted without waking an idle child
 
 ### Notes
 
-- The message does not join the current run. It waits until the current task settles, then starts a separate turn.
+- The message does not join the current run. It waits for the current execution to settle, then starts a separate turn.
+- Background jobs are not waited for and continue in parallel. The queue is promoted at the idle boundary even when background work remains.
+- `queued` is inferred from the observed status and `resume`; it does not inspect the server's existing queue. Other queued prompts may be ahead.
 - `delivery` is the server-reported delivery, normally `queue`.
 
 ## context
@@ -233,6 +272,7 @@ With `format: "json"`:
 - `sessionID`, `messageID?`, `delivery: "next-step"`, `chars`
 - `description?`
 - `status?` — status observed before the message was accepted
+- `active`, `backgroundJob?` — observed target activity and own background work
 - `pending?` — true when the message was accepted without waking an idle child
 
 ### Notes
@@ -260,13 +300,13 @@ Abort behavior:
 - `cancel` returns `Tool.Error` if the abort happens before or during the interrupt; an abort after the interrupt may still return a normal result.
 - `cancel_descendants` returns `Tool.Error` before discovery; otherwise it reports `aborted: true` with the targets it attempted and a warning when discovery was incomplete.
 
-The error message is actionable. Correct the arguments and continue.
+In OpenCode 2.3.0+, these `Tool.Error` results are normal call results from a cooperative stop, not interrupted tool calls. The error message is actionable. Correct the arguments and continue.
 
 No-op outcomes are not errors: `cancel` on an already stopped, failed, or finished session, and `cancel_descendants` with no running children, return a normal result.
 
-## Foreground and background
+## Background reports
 
-These tools are most useful with background children. A foreground `subagent` call blocks the parent until the child finishes, so the parent cannot call these tools while it waits. If you plan to control a child while it runs, launch it as a background subagent.
+In OpenCode 2.3.0+, all subagents run in the background. A `<subagent>` report arrives each time a child goes idle, and again after each later round. A report can say `state="running"` and include `Background work still running` when the child's execution is idle but its own background work remains. Read the report; do not resume the child just to read its result.
 
 ## Nested subagents
 
@@ -287,7 +327,7 @@ If cost matters for your workflow, one way to use the tools together is: check `
 
 ## Workflow
 
-1. Call `list`; it includes all statuses by default. Pass `statuses: ["running"]` when you only need active children.
+1. Call `list`; it includes all statuses by default. Pass `active: true` for one session's own work or `subtreeActive: true` for the whole delegated task. Use `statuses` only when you need a specific execution outcome.
 2. Pick the session ID from the result. Do not invent or guess IDs.
 3. To change what a running child is doing, use `steer`; to add a follow-up turn, use `queue`; to add a fact without waking it, use `context`. These adjust the existing session and keep its current run and context. `cancel` stops the session; restarting it with the built-in `subagent` tool is a different workflow.
 4. To stop one child, use `cancel`. To stop all your running descendants, use `cancel_descendants`; it cannot select one branch.

@@ -19,6 +19,23 @@ and what to do about it.
 - **Status can be stale.** `running` comes from live events and the session
   record, and an `unknown` row may still be running. A resumed child can look
   finished if the server omits its busy/idle timestamps.
+- **`finished` is execution-only.** In OpenCode 2.3.0+ a child can be
+  idle while its own shell, image, or subagent job is still running. `finished` means the
+  last execution succeeded, not that the delegated task is complete. Use
+  `active` and `subtreeActive` for work that is still in progress.
+- **Background detection is live.** The plugin learns about background work from
+  the `experimental.idle` hook, shell events, and structured context probes. A job
+  that started before the plugin loaded may not be visible until a later event or
+  a `cancel` probe. The idle hook is experimental; if it is unavailable, shell
+  events still provide partial coverage, but image and subagent jobs may be
+  missed. The hook has no timestamp, so the plugin stamps it locally; large clock
+  skew can delay or drop a snapshot.
+- **`subtreeActive` follows discovered rows.** Incomplete discovery can make it
+  false when an active descendant is missing. `discoveryComplete` and the warning
+  still apply.
+- **Unknown activity is conservative.** `unknown` and `backgroundJob.stateUnknown`
+  count as active or possibly active. `active` can be true for a session that is
+  not actually running.
 - **Live state is not persisted.** After a restart, the plugin rediscovers
   sessions through `ctx.session.list` and infers status from `session.get`; live
   events fill it again.
@@ -30,7 +47,13 @@ and what to do about it.
 - **Idle jobs keep running.** OpenCode can keep shell, subagent, or image jobs
   alive while a session is idle; `session.interrupt` does nothing there. When the
   session is running, an interrupt cancels its jobs as the session stops; for an
-  idle session, use the job's own controls.
+  idle session, use the job's own controls. The plugin context exposes no job
+  list or job cancellation API, so the plugin probes the target's structured
+  context when no live job is known, but it cannot stop those jobs.
+- **A failed or unverifiable probe is not proof of no job.** If the target
+  context cannot be read, or no authoritative idle snapshot exists for the
+  target, `cancel` sets `backgroundJob.stateUnknown` instead of claiming there
+  is no background work.
 - **`cancel` does not cascade.** Interrupting a child leaves its own children
   running. Use `cancel_descendants` for the caller's subtree, or cancel each
   child.
@@ -44,8 +67,11 @@ and what to do about it.
 - **`cancel_descendants` stops running descendants in batches.** It interrupts
   at most 20 per call (`maxCancelBatch`) and returns `remaining`; use
   the cursor when one is returned to continue, and use `cancel` for `unknown`
-  rows. The status check can lag and an aborted call can leave part of the batch
-  running, so re-run `list` and inspect `targets` and `remaining`.
+  rows. Idle descendants that own background jobs are counted in
+  `backgroundJobCount`, not interrupted; idle parents with active descendants are
+  reported through `subtreeActiveCount` and may wake. The status check can lag and
+  an aborted call can leave part of the batch running, so re-run `list` and
+  inspect `targets` and `remaining`.
 
 ## Usage and context
 
@@ -53,7 +79,7 @@ and what to do about it.
   update per step, so a child can show `0` or stale values until its step
   completes or it is cancelled. A child cancelled before its first step is saved
   can keep `0`, so re-query when `usageMayLag` is true (it is set while the
-  session is running or unknown).
+  session is active or unknown, including a `finished` row with background work).
 - **Context resets after compaction.** `contextTokens` is the last assistant step
   after the last completed compaction and can drop. `tokens` and `tokensUsed` are
   cumulative; use them for total usage, not current context.
@@ -66,9 +92,13 @@ and what to do about it.
   why.
 - **`usage.tree` includes the target.** `tree.sessions`, `tree.costUSD`, and the
   token totals cover the target as well as its descendants, so do not
-  double-count. A running or unknown descendant can make the totals lag, and
+  double-count. An active or unknown descendant can make the totals lag, and
   incomplete discovery can leave sessions out; see [reference](reference.md#usage)
   for the fields.
+- **`subtreeActive` depends on discovery.** Without `includeDescendants: true`,
+  descendant activity is unknown and `subtreeActive` is omitted. With the tree, a
+  missing descendant can make it false; `discoveryComplete` and `warning` still
+  apply.
 
 ## Targeting and permissions
 
@@ -112,9 +142,14 @@ and what to do about it.
 
 ## Compatibility
 
-- **An OpenCode V2 build with `ctx.session.list` is required.** There is no
+- **OpenCode 2.3.0+ is required.** There is no
   event-only fallback. The plugin uses only public V2 plugin APIs: `ctx.tool`,
   `ctx.session`, `ctx.event`, `ctx.permission`, `ctx.model`, `ctx.skill`, and
-  `ctx.options`. See the README for the supported version.
+  `ctx.options`. The `experimental.idle` hook is experimental and may be
+  unavailable in a custom build; in that case shell events still provide partial
+  coverage, but image and subagent jobs may be missed.
+- **`steer` cannot move a blocking shell.** The UI calls `session.background`
+  after admitting a steer; `Plugin.Context` does not expose it. Delivery may wait
+  for a blocking shell to finish. This is a UI parity gap, not a plugin bug.
 - **No fork or build step.** The plugin runs from source and uses the plugin API
   that OpenCode provides.

@@ -6,7 +6,7 @@ between server and CLI plugins.
 
 ## Requirements
 
-- An OpenCode V2 build with `ctx.session.list`; see the [README](../README.md) for the supported version.
+- OpenCode 2.3.0+.
 - The plugin is a TypeScript directory package: `package.json` exports
   `./src/index.ts`, and OpenCode loads the sources directly. There is no build
   step.
@@ -123,12 +123,6 @@ single file is skipped.
 > server plugin — from the global plugins directory or from `plugins` in
 > `opencode.json(c)`. The separate `cli.json` is for CLI-only (TUI) plugins and
 > is not needed here.
-
-## After installation
-
-Run `opencode reload`, then ask the agent to call `subagent_list`. If the tool is
-missing, check that `ctx.session.list` is available in your OpenCode build and
-that the plugin loaded without errors.
 
 ## Options
 
