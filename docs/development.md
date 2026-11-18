@@ -80,3 +80,15 @@ The tests cover:
 - Cooperative-stop abort behavior across discovery, context reads, interrupts, and batches.
 
 Discovery, ownership checks, interrupts, prompt/synthetic admission, and read-backs accept the tool's `context.signal`; stopping a tool call stops the underlying work where the client supports it.
+
+## CI
+
+`.github/workflows/ci.yml` runs on push and pull requests on `ubuntu-latest`:
+
+- install with `bun install --frozen-lockfile`;
+- `bun run check`;
+- `npm pack --dry-run`.
+
+The workflow uses read-only contents permission, a 15-minute timeout, and cancels superseded runs on the same ref.
+
+CI is Ubuntu-only. Windows-specific tests run locally on Windows and are not part of CI.
