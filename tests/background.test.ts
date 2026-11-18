@@ -25,7 +25,7 @@ describe("background job store", () => {
     });
   });
 
-  test("the idle hook records shell, image and subagent jobs", () => {
+  test("the idle hook records shell, image, subagent and codemode jobs", () => {
     const background = createBackgroundJobStore();
     background.recordIdle(
       {
@@ -50,12 +50,32 @@ describe("background job store", () => {
             agent: "general",
             description: "task",
           },
+          {
+            kind: "codemode",
+            sessionID: "ses_parent",
+            jobID: "cm_1",
+          },
         ],
       },
       10,
     );
     expect(background.backgroundJobFor("ses_parent")).toEqual({
-      kinds: ["shell", "image", "subagent"],
+      kinds: ["shell", "image", "subagent", "codemode"],
+    });
+  });
+
+  test("a codemode item without a job ID marks the owner unknown", () => {
+    const background = createBackgroundJobStore();
+    background.recordIdle(
+      {
+        sessionID: "ses_parent",
+        background: [{ kind: "codemode", sessionID: "ses_parent" }],
+      },
+      10,
+    );
+    expect(background.backgroundJobFor("ses_parent")).toEqual({
+      kinds: [],
+      stateUnknown: true,
     });
   });
 

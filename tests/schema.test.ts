@@ -31,6 +31,11 @@ describe("tool output schemas", () => {
         shellID: "sh_1",
         command: "run",
       },
+      {
+        kind: "codemode",
+        sessionID: "ses_child",
+        jobID: "cm_1",
+      },
     ]);
 
     const context = { sessionID: "ses_parent" };
@@ -80,6 +85,11 @@ describe("tool output schemas", () => {
         sessionID: "ses_child",
         shellID: "sh_1",
         command: "run",
+      },
+      {
+        kind: "codemode",
+        sessionID: "ses_child",
+        jobID: "cm_1",
       },
     ]);
 

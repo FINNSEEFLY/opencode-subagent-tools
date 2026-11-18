@@ -6,6 +6,7 @@ export const BACKGROUND_JOB_KIND = {
   shell: "shell",
   image: "image",
   subagent: "subagent",
+  codemode: "codemode",
 } as const;
 
 export type BackgroundJobKind =
@@ -75,6 +76,7 @@ interface BackgroundState {
   shell: Map<string, number>;
   image: Map<string, number>;
   subagent: Map<string, number>;
+  codemode: Map<string, number>;
   /** Last idle snapshot applied for this session, trusted or not. */
   snapshotAt: number;
   /** Whether an idle snapshot has ever been authoritative for this session. */
@@ -89,6 +91,7 @@ const createState = (): BackgroundState => ({
   shell: new Map(),
   image: new Map(),
   subagent: new Map(),
+  codemode: new Map(),
   snapshotAt: 0,
   hasAuthoritativeSnapshot: false,
   snapshotOwners: new Set(),
@@ -183,6 +186,12 @@ const parseIdleItem = (value: unknown): IdleItemParse => {
   }
   if (item.kind === BACKGROUND_JOB_KIND.image) {
     const key = normalizeBackgroundKey(item.path) ?? normalizeBackgroundKey(item.model);
+    return key
+      ? { ok: true, item: { kind: item.kind, key, owner } }
+      : { ok: false, owner };
+  }
+  if (item.kind === BACKGROUND_JOB_KIND.codemode) {
+    const key = normalizeBackgroundKey(item.jobID);
     return key
       ? { ok: true, item: { kind: item.kind, key, owner } }
       : { ok: false, owner };
@@ -331,7 +340,8 @@ export const createBackgroundJobStore = () => {
   /**
    * Apply an `experimental.idle` snapshot. The hook lists work owned by the
    * idle session and its descendants; items are stored under their owner so a
-   * descendant's job never makes the idle parent active.
+   * descendant's job never makes the idle parent active. Code Mode scripts are
+   * reported only through this hook; shell events do not cover them.
    *
    * The snapshot is authoritative only when every item can be parsed. An item
    * with a known owner preserves that owner's jobs and marks its state unknown;
@@ -488,7 +498,8 @@ export const createBackgroundJobStore = () => {
   /**
    * Structured fallback when the store has no authoritative snapshot for the
    * target, such as after a restart. Running shell messages and running
-   * shell/image/subagent tool parts are proof of work; a missing snapshot, or a
+   * shell/image/subagent tool parts are proof of work. Code Mode scripts are
+   * not visible here, so they rely on the idle hook. A missing snapshot, or a
    * failed or malformed read, is unknown, never idle.
    */
   const probe = async ({

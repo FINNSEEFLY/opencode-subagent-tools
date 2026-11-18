@@ -20,16 +20,17 @@ and what to do about it.
   record, and an `unknown` row may still be running. A resumed child can look
   finished if the server omits its busy/idle timestamps.
 - **`finished` is execution-only.** In OpenCode 2.3.0+ a child can be
-  idle while its own shell, image, or subagent job is still running. `finished` means the
-  last execution succeeded, not that the delegated task is complete. Use
-  `active` and `subtreeActive` for work that is still in progress.
+  idle while its own shell, image, subagent, or Code Mode job is still running.
+  `finished` means the last execution succeeded, not that the delegated task is
+  complete. Use `active` and `subtreeActive` for work that is still in progress.
 - **Background detection is live.** The plugin learns about background work from
   the `experimental.idle` hook, shell events, and structured context probes. A job
   that started before the plugin loaded may not be visible until a later event or
   a `cancel` probe. The idle hook is experimental; if it is unavailable, shell
-  events still provide partial coverage, but image and subagent jobs may be
-  missed. The hook has no timestamp, so the plugin stamps it locally; large clock
-  skew can delay or drop a snapshot.
+  events still provide partial coverage, but image, subagent, and Code Mode jobs
+  may be missed. Code Mode jobs are visible only through the idle hook; a
+  `cancel` probe cannot see them. The hook has no timestamp, so the plugin stamps
+  it locally; large clock skew can delay or drop a snapshot.
 - **`subtreeActive` follows discovered rows.** Incomplete discovery can make it
   false when an active descendant is missing. `discoveryComplete` and the warning
   still apply.
@@ -44,8 +45,8 @@ and what to do about it.
 
 - **`cancel` is a soft interrupt.** It uses `session.interrupt({ resume: false })`.
   A long tool call may finish first, and there is no hard abort.
-- **Idle jobs keep running.** OpenCode can keep shell, subagent, or image jobs
-  alive while a session is idle; `session.interrupt` does nothing there. When the
+- **Idle jobs keep running.** OpenCode can keep shell, subagent, image, or Code
+  Mode jobs alive while a session is idle; `session.interrupt` does nothing there. When the
   session is running, an interrupt cancels its jobs as the session stops; for an
   idle session, use the job's own controls. The plugin context exposes no job
   list or job cancellation API, so the plugin probes the target's structured
@@ -147,7 +148,7 @@ and what to do about it.
   `ctx.session`, `ctx.event`, `ctx.permission`, `ctx.model`, `ctx.skill`, and
   `ctx.options`. The `experimental.idle` hook is experimental and may be
   unavailable in a custom build; in that case shell events still provide partial
-  coverage, but image and subagent jobs may be missed.
+  coverage, but image, subagent, and Code Mode jobs may be missed.
 - **`steer` cannot move a blocking shell.** The UI calls `session.background`
   after admitting a steer; `Plugin.Context` does not expose it. Delivery may wait
   for a blocking shell to finish. This is a UI parity gap, not a plugin bug.
