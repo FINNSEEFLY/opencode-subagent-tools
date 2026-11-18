@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tested against `@opencode/plugin` 2.3.2.
 
+### Fixed
+
+- A Code Mode idle item no longer falls into the unknown-kind path and marks its owner `stateUnknown`.
+
 ## 0.2.0 - 2026-11-17
 
 ### Added
