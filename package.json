@@ -26,15 +26,14 @@
   "keywords": [
     "opencode",
     "opencode-plugin",
+    "opencode-v2",
+    "opencode-v2-plugin",
+    "agent-tools",
     "subagent",
+    "subagents",
     "subagent-tools",
     "subagent-control",
-    "agent",
-    "cancel",
-    "steer",
-    "queue",
-    "opencode-v2",
-    "plugin"
+    "subagent-orchestration"
   ],
   "repository": {
     "type": "git",
