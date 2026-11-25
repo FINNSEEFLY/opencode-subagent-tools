@@ -85,6 +85,32 @@ describe("activity projection", () => {
     expect(listOf(result, "ses_child")).toContain("usage=lagging");
   });
 
+  test("list reports an idle child with a background video", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+
+    await h.fireIdle("ses_child", [
+      {
+        kind: "video",
+        sessionID: "ses_child",
+        path: "out.mp4",
+      },
+    ]);
+
+    const result = await h.tools
+      .get("list")
+      .execute({ format: "json" }, { sessionID: "ses_parent" });
+    const row = result.output.rows[0];
+    expect(row.status).toBe("finished");
+    expect(row.active).toBe(true);
+    expect(row.subtreeActive).toBe(true);
+    expect(row.backgroundJob).toEqual({ kinds: ["video"] });
+    expect(row.usageMayLag).toBe(true);
+    expect(listOf(result, "ses_child")).toContain("active");
+    expect(listOf(result, "ses_child")).toContain("background=video");
+  });
+
   test("list reports an idle child with a Code Mode job", async () => {
     const h = makeHarness();
     h.sessions.set("ses_child", finished("ses_child", "ses_parent"));

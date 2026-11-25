@@ -25,7 +25,7 @@ describe("background job store", () => {
     });
   });
 
-  test("the idle hook records shell, image, subagent and codemode jobs", () => {
+  test("the idle hook records shell, image, video, subagent and codemode jobs", () => {
     const background = createBackgroundJobStore();
     background.recordIdle(
       {
@@ -44,6 +44,11 @@ describe("background job store", () => {
             model: "model",
           },
           {
+            kind: "video",
+            sessionID: "ses_parent",
+            path: "out.mp4",
+          },
+          {
             kind: "subagent",
             sessionID: "ses_parent",
             childSessionID: "ses_child",
@@ -60,7 +65,22 @@ describe("background job store", () => {
       10,
     );
     expect(background.backgroundJobFor("ses_parent")).toEqual({
-      kinds: ["shell", "image", "subagent", "codemode"],
+      kinds: ["shell", "image", "video", "subagent", "codemode"],
+    });
+  });
+
+  test("a video item without a path marks the owner unknown", () => {
+    const background = createBackgroundJobStore();
+    background.recordIdle(
+      {
+        sessionID: "ses_parent",
+        background: [{ kind: "video", sessionID: "ses_parent", path: "" }],
+      },
+      10,
+    );
+    expect(background.backgroundJobFor("ses_parent")).toEqual({
+      kinds: [],
+      stateUnknown: true,
     });
   });
 
@@ -105,6 +125,27 @@ describe("background job store", () => {
     expect(background.backgroundJobFor("ses_parent")).toBeUndefined();
     expect(background.backgroundJobFor("ses_child")).toEqual({
       kinds: [BACKGROUND_JOB_KIND.shell],
+    });
+  });
+
+  test("a descendant video item is stored under its owner", () => {
+    const background = createBackgroundJobStore();
+    background.recordIdle(
+      {
+        sessionID: "ses_parent",
+        background: [
+          {
+            kind: "video",
+            sessionID: "ses_child",
+            path: "out.mp4",
+          },
+        ],
+      },
+      10,
+    );
+    expect(background.backgroundJobFor("ses_parent")).toBeUndefined();
+    expect(background.backgroundJobFor("ses_child")).toEqual({
+      kinds: [BACKGROUND_JOB_KIND.video],
     });
   });
 
@@ -355,13 +396,51 @@ describe("background probe", () => {
         { type: "shell", status: "running" },
         {
           type: "assistant",
-          content: [{ type: "tool", name: "image", state: { status: "running" } }],
+          content: [
+            { type: "tool", name: "generate_image", state: { status: "running" } },
+          ],
         },
       ]),
       targetID: "ses_target",
     });
     expect(probe.failed).toBe(false);
     expect(probe.backgroundJob).toEqual({ kinds: ["shell", "image"] });
+  });
+
+  test("recognizes both image tool names", async () => {
+    for (const name of ["generate_image", "experimental_image_generate"]) {
+      const background = createBackgroundJobStore();
+      background.recordIdle({ sessionID: "ses_target", background: [] }, 1);
+      const probe = await background.probe({
+        session: probeContext([
+          {
+            type: "assistant",
+            content: [{ type: "tool", name, state: { status: "running" } }],
+          },
+        ]),
+        targetID: "ses_target",
+      });
+      expect(probe.failed).toBe(false);
+      expect(probe.backgroundJob).toEqual({ kinds: ["image"] });
+    }
+  });
+
+  test("finds a running generate_video tool part", async () => {
+    const background = createBackgroundJobStore();
+    background.recordIdle({ sessionID: "ses_target", background: [] }, 1);
+    const probe = await background.probe({
+      session: probeContext([
+        {
+          type: "assistant",
+          content: [
+            { type: "tool", name: "generate_video", state: { status: "running" } },
+          ],
+        },
+      ]),
+      targetID: "ses_target",
+    });
+    expect(probe.failed).toBe(false);
+    expect(probe.backgroundJob).toEqual({ kinds: ["video"] });
   });
 
   test("finds a running subagent tool part", async () => {

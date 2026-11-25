@@ -655,6 +655,34 @@ describe("cancel_descendants background activity", () => {
     expect(result.content).toContain("Background work may remain");
   });
 
+  test("reports an idle video job when no execution is running", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "video",
+        sessionID: "ses_child",
+        path: "out.mp4",
+      },
+    ]);
+
+    const result = await h.tools
+      .get("cancel_descendants")
+      .execute({ format: "json" }, { sessionID: "ses_parent" });
+    expect(h.calls.interrupt).toHaveLength(0);
+    expect(result.output.running).toBe(0);
+    expect(result.output.activeCount).toBe(1);
+    expect(result.output.subtreeActiveCount).toBe(1);
+    expect(result.output.backgroundJobCount).toBe(1);
+    expect(result.output.backgroundJobMayRemain).toBe(true);
+    expect(result.output.targets).toEqual([]);
+    expect(result.content).toContain(
+      "idle subagent(s) own background jobs that this tool cannot stop",
+    );
+    expect(result.content).toContain("Background work may remain");
+  });
+
   test("a running target reports its own background job", async () => {
     const h = makeHarness();
     createChild(h, "ses_child", "ses_parent");

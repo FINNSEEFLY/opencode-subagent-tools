@@ -755,6 +755,29 @@ describe("cancel with background work", () => {
     expect(result.content).toContain("cannot stop the background job (image)");
   });
 
+  test("an idle target with a background video is reported honestly", async () => {
+    const h = makeHarness();
+    h.sessions.set("ses_child", finished("ses_child", "ses_parent"));
+    cleanups.push(await h.setup());
+    await h.fireIdle("ses_child", [
+      {
+        kind: "video",
+        sessionID: "ses_child",
+        path: "out.mp4",
+      },
+    ]);
+    h.ctx.session.interrupt = async () => ({ interrupted: false });
+
+    const result = await h.tools
+      .get("cancel")
+      .execute({ sessionID: "ses_child", format: "json" }, { sessionID: "ses_parent" });
+    expect(result.output.backgroundJob).toEqual({
+      kinds: ["video"],
+      mayRemain: true,
+    });
+    expect(result.content).toContain("cannot stop the background job (video)");
+  });
+
   test("a failed probe sets stateUnknown instead of claiming no job", async () => {
     const h = makeHarness();
     h.sessions.set("ses_child", finished("ses_child", "ses_parent"));

@@ -48,7 +48,7 @@ Text output is one row per session plus summary and warning lines. JSON output c
   - `active` — true when the session itself is running, unknown, or owns a background job. Descendants are excluded.
   - `subtreeActive` — true when the session or any discovered descendant is active.
   - `activeDescendants?` — true only when at least one discovered child is active in its subtree.
-  - `backgroundJob?` — the session's own observed work: `kinds` (`shell`, `image`, `subagent`, `codemode`), and optional `stateUnknown` when work may remain but could not be verified.
+  - `backgroundJob?` — the session's own observed work: `kinds` (`shell`, `image`, `video`, `subagent`, `codemode`), and optional `stateUnknown` when work may remain but could not be verified.
   - `ageSeconds?` (omitted when the launch time is unknown), `launchedAt`.
   - `usageMayLag?` — true when the row is active or unknown.
   - `usage?` — `costUSD?`, `tokens?`, and `tokensUsed?` when the server provides them.
@@ -134,7 +134,7 @@ Text output reports the interrupt result, the current state, and a lag note. JSO
 - `accepted` — alias for `interrupt === "accepted"`.
 - `status` — execution status after the interrupt and status check.
 - `active` — true when the target is running, unknown, or owns observed background work after the call.
-- `backgroundJob?` — the target's own observed work: `kinds` (`shell`, `image`, `subagent`, `codemode`), `mayRemain?` when work may still run after the call, and `stateUnknown?` when a probe failed.
+- `backgroundJob?` — the target's own observed work: `kinds` (`shell`, `image`, `video`, `subagent`, `codemode`), `mayRemain?` when work may still run after the call, and `stateUnknown?` when a probe failed.
 - `reason?` — the recorded reason.
 - `readBackMayLag` — true when the interrupt was accepted and the status check after cancellation still reports `running` or `unknown`.
 - `cancellationDoesNotCascade` — always `true`; cancellation is non-cascading, not a claim that the target has no children.
@@ -147,7 +147,7 @@ Text distinguishes an accepted interrupt with a remaining job ("may continue"), 
 - An unknown target, a self-target, a malformed ID, or a target outside `sessionControlPolicy` returns `Tool.Error`.
 - Aborting before or during the interrupt returns `Tool.Error`. An abort after the interrupt may return a normal result.
 - Cancelling a stopped, failed, or finished session is not an error.
-- If the target is idle or terminal and no live background job is known, the tool probes `session.context(target)` for running shell messages and shell/image/subagent tool parts. It cannot see a Code Mode job; that requires an idle snapshot. A failed probe, or a probe without an authoritative idle snapshot for the target, sets `backgroundJob.stateUnknown`; it does not claim there is no job.
+- If the target is idle or terminal and no live background job is known, the tool probes `session.context(target)` for running shell messages and shell/image/video/subagent tool parts. Video jobs are normally visible through the idle hook because `generate_video` returns before the probe runs. It cannot see a Code Mode job; that requires an idle snapshot. A failed probe, or a probe without an authoritative idle snapshot for the target, sets `backgroundJob.stateUnknown`; it does not claim there is no job.
 - This is a soft interrupt: it does not cascade, a long tool call may finish first, and jobs owned by an idle session keep running. The tool reports those jobs but cannot stop them.
 - OpenCode may wake the parent with a cancellation notice.
 - If `interrupt` is `unknown`, `readBackMayLag` is true, or `status` is `running` or `unknown`, re-run `list`.
@@ -298,12 +298,12 @@ Text output reports the target and size. JSON output contains:
 - `finished` — the last run succeeded. This does not mean the delegated task is complete.
 - `unknown` — no reliable status is available; the session may still be running.
 
-`status` is execution-oriented. In OpenCode 2.3.0+, shell, image, subagent, or Code Mode work can stay alive while a session is idle, so use the activity fields for "still working":
+`status` is execution-oriented. In OpenCode 2.3.0+, shell, image, video, subagent, or Code Mode work can stay alive while a session is idle, so use the activity fields for "still working":
 
 - `active` — the session itself is running, unknown, or owns a background job. Descendants are not included.
 - `subtreeActive` — the session or any discovered descendant is active.
 - `activeDescendants` — at least one discovered child is active. An idle parent with active descendants may wake.
-- `backgroundJob` — the session's own observed work: `kinds` can contain `shell`, `image`, `subagent`, and `codemode`. `stateUnknown` means work may remain but could not be verified.
+- `backgroundJob` — the session's own observed work: `kinds` can contain `shell`, `image`, `video`, `subagent`, and `codemode`. `stateUnknown` means work may remain but could not be verified.
 - `usageMayLag` — the session is active or unknown, so usage may still grow.
 
 Status and activity are observed from live events, the idle hook, shell events, structured context probes, and the session record. Code Mode jobs are visible only through the idle hook. They can lag, and an `unknown` row may still be running. See [limitations](limitations.md).

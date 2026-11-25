@@ -40,7 +40,7 @@ Tool names below omit the default `subagent_` prefix. With the default namespace
 - `activeDescendants` — at least one discovered child is active in its subtree.
   An idle parent with active descendants may wake.
 - `backgroundJob` — the session's own observed background work. `kinds` can
-  contain `shell`, `image`, `subagent`, and `codemode`. `stateUnknown` means work may remain
+  contain `shell`, `image`, `video`, `subagent`, and `codemode`. `stateUnknown` means work may remain
   but could not be verified.
 - `usageMayLag` — usage may still grow because the session is active or unknown.
 

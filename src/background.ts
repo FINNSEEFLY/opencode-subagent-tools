@@ -5,6 +5,7 @@ import { isUnsafeControlCode } from "./text";
 export const BACKGROUND_JOB_KIND = {
   shell: "shell",
   image: "image",
+  video: "video",
   subagent: "subagent",
   codemode: "codemode",
 } as const;
@@ -60,7 +61,7 @@ export const MAX_BACKGROUND_SESSIONS = 500;
 export const MAX_BACKGROUND_JOBS_PER_KIND = 100;
 export const MAX_BACKGROUND_KEY_LENGTH = 500;
 
-/** Validate a shell/image key without rejecting spaces in image paths. */
+/** Validate a shell/image/video key without rejecting spaces in paths. */
 export const normalizeBackgroundKey = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const key = value.trim();
@@ -75,6 +76,7 @@ export const normalizeBackgroundKey = (value: unknown): string | undefined => {
 interface BackgroundState {
   shell: Map<string, number>;
   image: Map<string, number>;
+  video: Map<string, number>;
   subagent: Map<string, number>;
   codemode: Map<string, number>;
   /** Last idle snapshot applied for this session, trusted or not. */
@@ -90,6 +92,7 @@ interface BackgroundState {
 const createState = (): BackgroundState => ({
   shell: new Map(),
   image: new Map(),
+  video: new Map(),
   subagent: new Map(),
   codemode: new Map(),
   snapshotAt: 0,
@@ -190,6 +193,12 @@ const parseIdleItem = (value: unknown): IdleItemParse => {
       ? { ok: true, item: { kind: item.kind, key, owner } }
       : { ok: false, owner };
   }
+  if (item.kind === BACKGROUND_JOB_KIND.video) {
+    const key = normalizeBackgroundKey(item.path);
+    return key
+      ? { ok: true, item: { kind: item.kind, key, owner } }
+      : { ok: false, owner };
+  }
   if (item.kind === BACKGROUND_JOB_KIND.codemode) {
     const key = normalizeBackgroundKey(item.jobID);
     return key
@@ -262,7 +271,9 @@ const readContext = async (
 /** Tool names whose running call proves the session owns that background kind. */
 const RUNNING_TOOL_KIND: ReadonlyMap<string, BackgroundJobKind> = new Map([
   ["shell", BACKGROUND_JOB_KIND.shell],
-  ["image", BACKGROUND_JOB_KIND.image],
+  ["generate_image", BACKGROUND_JOB_KIND.image],
+  ["experimental_image_generate", BACKGROUND_JOB_KIND.image],
+  ["generate_video", BACKGROUND_JOB_KIND.video],
   ["subagent", BACKGROUND_JOB_KIND.subagent],
 ]);
 
@@ -498,8 +509,8 @@ export const createBackgroundJobStore = () => {
   /**
    * Structured fallback when the store has no authoritative snapshot for the
    * target, such as after a restart. Running shell messages and running
-   * shell/image/subagent tool parts are proof of work. Code Mode scripts are
-   * not visible here, so they rely on the idle hook. A missing snapshot, or a
+   * shell/image/video/subagent tool parts are proof of work. Code Mode scripts
+   * are not visible here, so they rely on the idle hook. A missing snapshot, or a
    * failed or malformed read, is unknown, never idle.
    */
   const probe = async ({

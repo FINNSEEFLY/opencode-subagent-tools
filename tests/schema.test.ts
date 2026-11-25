@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BACKGROUND_JOB_SCHEMA } from "../src/background";
 import { cleanups, createChild, makeHarness, sessionInfo } from "./harness";
 import { validateSchema } from "./schema";
 
@@ -30,6 +31,11 @@ describe("tool output schemas", () => {
         sessionID: "ses_child",
         shellID: "sh_1",
         command: "run",
+      },
+      {
+        kind: "video",
+        sessionID: "ses_child",
+        path: "out.mp4",
       },
       {
         kind: "codemode",
@@ -68,6 +74,14 @@ describe("tool output schemas", () => {
     expect(validateSchema(result.output, tool.output)).toEqual([]);
   });
 
+  test("background schema accepts video and rejects an unknown kind", () => {
+    expect(BACKGROUND_JOB_SCHEMA.properties.kinds.items.enum).toContain("video");
+    expect(validateSchema({ kinds: ["video"] }, BACKGROUND_JOB_SCHEMA)).toEqual([]);
+    expect(validateSchema({ kinds: ["future-kind"] }, BACKGROUND_JOB_SCHEMA)).not.toEqual(
+      [],
+    );
+  });
+
   test("validates the direct schema in json-only mode", async () => {
     const h = makeHarness({ options: { allowedOutputFormats: ["json"] } });
     h.sessions.set(
@@ -85,6 +99,11 @@ describe("tool output schemas", () => {
         sessionID: "ses_child",
         shellID: "sh_1",
         command: "run",
+      },
+      {
+        kind: "video",
+        sessionID: "ses_child",
+        path: "out.mp4",
       },
       {
         kind: "codemode",

@@ -49,7 +49,7 @@ import { fileURLToPath } from "node:url";
 
 The suite lives in `tests/` and mirrors the feature areas: `list`, `usage`, `activity`, `background`, `actions`, `status`, `mutations`, `permissions`, `policy`, `cancel-descendants`, `discovery`, and `options`, plus focused unit tests for config, cursor, events, messages, output, schema validation, and tokens. `tests/harness.ts` builds the mocked plugin context, the idle-hook and synthetic-message helpers, and the per-test cleanup hook. Tests exercise the plugin through its public `setup`/tool surface.
 
-CI runs the unit suite against `@opencode/plugin` 2.3.0. Loading the packed package into a real OpenCode server is a manual release check, not a CI job.
+CI runs the unit suite against the `@opencode/plugin` version from `package.json`. Loading the packed package into a real OpenCode server is a manual release check, not a CI job.
 
 `tests/`, `.oxlintrc.json`, and `bun.lock` are repository-only; the npm package ships the source tree, `SKILL.md`, `SECURITY.md`, and the user-facing docs.
 
