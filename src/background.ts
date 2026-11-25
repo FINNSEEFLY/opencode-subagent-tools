@@ -2,19 +2,46 @@ import { normalizeSessionID } from "./session";
 import { RUN_STATUS, type RunStatus } from "./status";
 import { isUnsafeControlCode } from "./text";
 
-export const BACKGROUND_JOB_KIND = {
-  shell: "shell",
-  image: "image",
-  video: "video",
-  subagent: "subagent",
-  codemode: "codemode",
-} as const;
+interface BackgroundJobSpec {
+  /** Extract a normalized job key from an idle item. */
+  key: (item: Record<string, unknown>) => string | undefined;
+  /** Tool names whose running call proves this background kind. */
+  tools: readonly string[];
+}
 
-export type BackgroundJobKind =
-  (typeof BACKGROUND_JOB_KIND)[keyof typeof BACKGROUND_JOB_KIND];
+const BACKGROUND_JOB_SPECS = {
+  shell: {
+    key: (item) => normalizeBackgroundKey(item.shellID),
+    tools: ["shell"],
+  },
+  image: {
+    key: (item) =>
+      normalizeBackgroundKey(item.path) ?? normalizeBackgroundKey(item.model),
+    tools: ["generate_image", "experimental_image_generate"],
+  },
+  video: {
+    key: (item) => normalizeBackgroundKey(item.path),
+    tools: ["generate_video"],
+  },
+  subagent: {
+    key: (item) => normalizeSessionID(item.childSessionID),
+    tools: ["subagent"],
+  },
+  codemode: {
+    key: (item) => normalizeBackgroundKey(item.jobID),
+    tools: [],
+  },
+} as const satisfies Record<string, BackgroundJobSpec>;
 
-export const BACKGROUND_JOB_KINDS: readonly BackgroundJobKind[] =
-  Object.values(BACKGROUND_JOB_KIND);
+export type BackgroundJobKind = keyof typeof BACKGROUND_JOB_SPECS;
+
+export const BACKGROUND_JOB_KINDS: readonly BackgroundJobKind[] = Object.keys(
+  BACKGROUND_JOB_SPECS,
+) as BackgroundJobKind[];
+
+export const BACKGROUND_JOB_KIND = Object.fromEntries(
+  BACKGROUND_JOB_KINDS.map((kind) => [kind, kind]),
+) as { readonly [K in BackgroundJobKind]: K };
 
 const BACKGROUND_JOB_KIND_SET: ReadonlySet<string> = new Set(BACKGROUND_JOB_KINDS);
 
@@ -74,11 +101,8 @@ export const normalizeBackgroundKey = (value: unknown): string | undefined => {
 };
 
 interface BackgroundState {
-  shell: Map<string, number>;
-  image: Map<string, number>;
-  video: Map<string, number>;
-  subagent: Map<string, number>;
-  codemode: Map<string, number>;
+  /** Jobs grouped by kind, then keyed by their normalized ID or path. */
+  jobs: Map<BackgroundJobKind, Map<string, number>>;
   /** Last idle snapshot applied for this session, trusted or not. */
   snapshotAt: number;
   /** Whether an idle snapshot has ever been authoritative for this session. */
@@ -90,11 +114,7 @@ interface BackgroundState {
 }
 
 const createState = (): BackgroundState => ({
-  shell: new Map(),
-  image: new Map(),
-  video: new Map(),
-  subagent: new Map(),
-  codemode: new Map(),
+  jobs: new Map(),
   snapshotAt: 0,
   hasAuthoritativeSnapshot: false,
   snapshotOwners: new Set(),
@@ -104,7 +124,13 @@ const createState = (): BackgroundState => ({
 const stateJobMap = (
   state: BackgroundState,
   kind: BackgroundJobKind,
-): Map<string, number> => state[kind];
+): Map<string, number> => {
+  const existing = state.jobs.get(kind);
+  if (existing) return existing;
+  const map = new Map<string, number>();
+  state.jobs.set(kind, map);
+  return map;
+};
 
 const trimMap = (map: Map<string, number>, limit: number) => {
   while (map.size > limit) {
@@ -123,8 +149,7 @@ const trimSet = (set: Set<string>, limit: number) => {
 };
 
 const clearAtOrBefore = (state: BackgroundState, at: number) => {
-  for (const kind of BACKGROUND_JOB_KINDS) {
-    const map = stateJobMap(state, kind);
+  for (const map of state.jobs.values()) {
     for (const [key, startedAt] of map) {
       if (startedAt <= at) map.delete(key);
     }
@@ -181,31 +206,7 @@ const parseIdleItem = (value: unknown): IdleItemParse => {
   }
   if (!owner) return { ok: false };
 
-  if (item.kind === BACKGROUND_JOB_KIND.shell) {
-    const key = normalizeBackgroundKey(item.shellID);
-    return key
-      ? { ok: true, item: { kind: item.kind, key, owner } }
-      : { ok: false, owner };
-  }
-  if (item.kind === BACKGROUND_JOB_KIND.image) {
-    const key = normalizeBackgroundKey(item.path) ?? normalizeBackgroundKey(item.model);
-    return key
-      ? { ok: true, item: { kind: item.kind, key, owner } }
-      : { ok: false, owner };
-  }
-  if (item.kind === BACKGROUND_JOB_KIND.video) {
-    const key = normalizeBackgroundKey(item.path);
-    return key
-      ? { ok: true, item: { kind: item.kind, key, owner } }
-      : { ok: false, owner };
-  }
-  if (item.kind === BACKGROUND_JOB_KIND.codemode) {
-    const key = normalizeBackgroundKey(item.jobID);
-    return key
-      ? { ok: true, item: { kind: item.kind, key, owner } }
-      : { ok: false, owner };
-  }
-  const key = normalizeSessionID(item.childSessionID);
+  const key = BACKGROUND_JOB_SPECS[item.kind].key(item);
   return key ? { ok: true, item: { kind: item.kind, key, owner } } : { ok: false, owner };
 };
 
@@ -269,13 +270,11 @@ const readContext = async (
 };
 
 /** Tool names whose running call proves the session owns that background kind. */
-const RUNNING_TOOL_KIND: ReadonlyMap<string, BackgroundJobKind> = new Map([
-  ["shell", BACKGROUND_JOB_KIND.shell],
-  ["generate_image", BACKGROUND_JOB_KIND.image],
-  ["experimental_image_generate", BACKGROUND_JOB_KIND.image],
-  ["generate_video", BACKGROUND_JOB_KIND.video],
-  ["subagent", BACKGROUND_JOB_KIND.subagent],
-]);
+const RUNNING_TOOL_KIND: ReadonlyMap<string, BackgroundJobKind> = new Map(
+  BACKGROUND_JOB_KINDS.flatMap((kind) =>
+    BACKGROUND_JOB_SPECS[kind].tools.map((name) => [name, kind] as const),
+  ),
+);
 
 const scanTargetMessages = (
   messages: readonly ProbeMessage[],
@@ -480,7 +479,7 @@ export const createBackgroundJobStore = () => {
     rememberDeleted(id, at);
     states.delete(id);
     for (const state of states.values()) {
-      state.subagent.delete(id);
+      state.jobs.get(BACKGROUND_JOB_KIND.subagent)?.delete(id);
       state.snapshotOwners.delete(id);
     }
   };
@@ -489,7 +488,7 @@ export const createBackgroundJobStore = () => {
     const state = states.get(sessionID);
     if (!state) return undefined;
     const kinds = BACKGROUND_JOB_KINDS.filter(
-      (kind) => stateJobMap(state, kind).size > 0,
+      (kind) => (state.jobs.get(kind)?.size ?? 0) > 0,
     );
     const stateUnknown = state.unknownAt > 0;
     if (kinds.length === 0 && !stateUnknown) return undefined;
