@@ -21,3 +21,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Playwright CLI output
+.playwright-cli/
